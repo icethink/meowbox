@@ -5,15 +5,24 @@ import { ThreadList } from './components/list/ThreadList';
 import { ThreadRow } from './components/list/ThreadRow';
 import { ThreadView } from './components/thread/ThreadView';
 import { DigestPanel } from './components/panel/DigestPanel';
+import { CommandPalette } from './components/CommandPalette';
+import { Toast } from './components/ui/Toast';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { mockThreadDetails, mockThreads } from './mock/threads';
 import { mockViews } from './mock/accounts';
 import { useAppStore } from './store/app';
 
 export default function App() {
-  const { selectedThreadKey, selectThread, archivedKeys, archiveThread, readKeys } = useAppStore();
-  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
-  const activeProjectTag = useAppStore((s) => s.activeProjectTag);
-  const activeView = useAppStore((s) => s.activeView);
+  const {
+    rightPanelOpen,
+    selectedThreadKey,
+    selectThread,
+    archivedKeys,
+    archiveThread,
+    readKeys,
+    activeProjectTag,
+    activeView,
+  } = useAppStore();
 
   const threads = useMemo(
     () =>
@@ -26,6 +35,8 @@ export default function App() {
   );
 
   const threadKeys = useMemo(() => threads.map((t) => t.thread_key), [threads]);
+  useKeyboardShortcuts({ threadKeys, selectedThreadKey });
+
   const selected = selectedThreadKey ? (mockThreadDetails[selectedThreadKey] ?? null) : null;
   const listTitle = mockViews.find((v) => v.key === activeView)?.label ?? 'すべて';
 
@@ -38,28 +49,32 @@ export default function App() {
   }
 
   return (
-    <AppShell
-      sidebar={<Sidebar />}
-      list={
-        <ThreadList title={listTitle} threads={threads}>
-          {threads.map((t) => (
-            <ThreadRow
-              key={t.thread_key}
-              thread={t}
-              selected={t.thread_key === selectedThreadKey}
-              onSelect={() => selectThread(t.thread_key)}
-              onArchive={() => handleArchive(t.thread_key)}
-            />
-          ))}
-        </ThreadList>
-      }
-      thread={
-        <ThreadView
-          thread={selected}
-          onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
-        />
-      }
-      panel={rightPanelOpen ? <DigestPanel /> : null}
-    />
+    <>
+      <AppShell
+        sidebar={<Sidebar />}
+        list={
+          <ThreadList title={listTitle} threads={threads}>
+            {threads.map((t) => (
+              <ThreadRow
+                key={t.thread_key}
+                thread={t}
+                selected={t.thread_key === selectedThreadKey}
+                onSelect={() => selectThread(t.thread_key)}
+                onArchive={() => handleArchive(t.thread_key)}
+              />
+            ))}
+          </ThreadList>
+        }
+        thread={
+          <ThreadView
+            thread={selected}
+            onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
+          />
+        }
+        panel={rightPanelOpen ? <DigestPanel /> : null}
+      />
+      <CommandPalette />
+      <Toast />
+    </>
   );
 }

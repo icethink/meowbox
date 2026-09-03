@@ -27,8 +27,6 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
-    // (6) でテストを足すまでの間、空でも CI を落とさない
-    passWithNoTests: true,
     css: false,
   },
 });
