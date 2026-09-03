@@ -8,7 +8,9 @@ Meowbox は Rust 製の AI フレンドリーなメーラー。案件ごとに�
 - `docs/DESIGN.md` — アーキテクチャ・スキーマ・MCP ツール一覧・ロードマップ
 - `crates/mailcore/src/lib.rs` — ドメイン型と `MailBackend` トレイト
 - `crates/mailstore/src/schema.sql` — DB スキーマ（正）
-- `docs/design/` — UI デザイン（`main-dark.png` が見本、`tokens.css` が色/字/余白の正、`main-dark.reference.html` が寸法参照）
+- `docs/design/` — UI デザイン（`main-dark.png` が見本、`tokens.css` が色/字/余白の正、`main-dark.reference.html` が寸法参照、`impl-main-dark.png` が実装の現状）
+- `docs/adr/` — 設計判断の記録。方針を変えるときは ADR を足してから実装する
+- `apps/desktop/src/api/` — UI から見た唯一のデータ入口。P3 でここだけ `invoke()` に差し替える
 
 ## ワークスペース
 ```
@@ -17,7 +19,7 @@ crates/mailstore  SQLite（rusqlite bundled, FTS5 trigram）
 crates/mailsync   IMAP/Gmail/Graph バックエンド + MIME パース + 同期エンジン
 crates/mailmcp    MCP サーバ（rmcp 予定）
 crates/mailcli    `meowbox` バイナリ。UI/MCP なしで動くデバッグ入口
-apps/desktop      Tauri v2 + React + TypeScript（P2 で作成）
+apps/desktop      Tauri v2 + React + TypeScript + Tailwind v4（pnpm）
 ```
 依存方向は **core ← store ← sync ← (mcp, cli, desktop)**。逆流させない。
 
@@ -41,6 +43,12 @@ cargo run -p mailcli -- accounts list
 6. 日本語メールが前提。ISO-2022-JP / Shift_JIS のデコード、trigram FTS を壊さない。
 7. `unwrap()` は test 以外で使わない。エラーは `anyhow` (アプリ層) / `thiserror` (ライブラリ層)。
 8. UI は `docs/design/tokens.css` のトークンだけで色を指定する。人間側=`--accent`、Claude 由来=`--ai` を混ぜない。
+   HEX / `rgba()` の直書きは eslint が落とす。足りない値は `tokens.css` に名前を付けてから使い、
+   `apps/desktop/src/styles/tokens.css` にも同じ内容を反映する（片方だけ直さない）。
+9. Tailwind の `@theme` にキーを足すときは、`--color-*` と `--text-*`（文字サイズ）で
+   同じ名前を使わない。両方あると `text-<name>` が色として解決される。
+   文字サイズを足したら `--text-<name>--line-height` も必ず一緒に指定する。
+10. UI から DB / IPC を直接叩かない。データ取得は `apps/desktop/src/api/` の関数だけを通す。
 
 ## 現在のフェーズと次の一手
 - [x] P0-a: workspace 雛形、スキーマ、`meowbox init / accounts / search`
@@ -48,8 +56,13 @@ cargo run -p mailcli -- accounts list
       （最初のターゲット: 汎用 IMAP 1 アカウント、INBOX の直近 90 日）
 - [ ] P1: `mailmcp` を rmcp で実装（list_accounts / search_messages / get_thread / inbox_digest）
       → Claude Desktop / Cowork から叩けることを確認したら Thunderbird MCP を卒業
-- [ ] P2: Tauri UI
-- [ ] P3: 要約・タスク抽出・下書き・承認送信
+- [x] P2: Tauri UI（AppShell / Sidebar / ThreadList / ThreadView / DigestPanel、
+      キーボード操作、モックデータ）— 2026-09-03
+- [ ] P3: `apps/desktop/src/api/` のモックを Tauri invoke → mailstore に差し替える。
+      `listAccounts / listProjects / listThreads / getThread / getDigest / createDraft` を
+      `#[tauri::command]` として `src-tauri` に実装し、UI 側は `src/api/` の中身だけを
+      `invoke()` に置き換える（コンポーネントには触らない）。
+      あわせて要約・タスク抽出・下書き生成・承認送信を実データに繋ぐ
 - [ ] P4: Gmail / M365 OAuth、IDLE、バックフィル
 
 ## 追加予定の主要クレート
