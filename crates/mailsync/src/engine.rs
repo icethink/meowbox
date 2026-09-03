@@ -224,8 +224,14 @@ fn has_flag(flags: &[String], flag: &str) -> bool {
 /// フォルダ名をファイルパスの 1 セグメントとして安全に使える形にする。
 /// `/ \ : * ? " < > |` と制御文字を `_` に置換する。パス区切りや予約文字を
 /// 含まないフォルダ名（日本語含む）はそのまま通す。
+///
+/// フォルダ名は IMAP サーバ由来で信頼境界の外にある。置換後の結果が
+/// `"."` / `".."`（カレント/親ディレクトリ）や空文字列になる場合、そのまま
+/// パスセグメントとして使うと `data_dir` の外に書き込めてしまうため、
+/// 安全な別名に潰す。
 fn sanitize_folder(path: &str) -> String {
-    path.chars()
+    let replaced: String = path
+        .chars()
         .map(|c| {
             if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
                 '_'
@@ -233,7 +239,14 @@ fn sanitize_folder(path: &str) -> String {
                 c
             }
         })
-        .collect()
+        .collect();
+
+    match replaced.as_str() {
+        "" => "_".to_string(),
+        "." => "_".to_string(),
+        ".." => "__".to_string(),
+        _ => replaced,
+    }
 }
 
 #[cfg(test)]
@@ -443,5 +456,102 @@ mod tests {
     fn sanitize_folder_replaces_reserved_characters() {
         assert_eq!(sanitize_folder("INBOX/Sent"), "INBOX_Sent");
         assert_eq!(sanitize_folder("a\\b:c*d?e\"f<g>h|i"), "a_b_c_d_e_f_g_h_i");
+    }
+
+    #[test]
+    fn sanitize_folder_rejects_dot_only_names() {
+        assert_ne!(sanitize_folder(".."), "..");
+        assert_ne!(sanitize_folder("."), ".");
+        assert_ne!(sanitize_folder(""), "");
+    }
+
+    /// フェイクバックエンドが `".."` という名前のフォルダを `LIST` で返しても、
+    /// `.eml` が `data_dir/<account_id>/` の外に出ないことを確かめる。
+    struct DotDotBackend {
+        message: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl MailBackend for DotDotBackend {
+        async fn list_folders(&self) -> Result<Vec<(String, FolderRole)>, BackendError> {
+            Ok(vec![("..".to_string(), FolderRole::Other)])
+        }
+
+        async fn folder_status(&self, _folder: &str) -> Result<FolderStatus, BackendError> {
+            Ok(FolderStatus {
+                uidvalidity: 1,
+                uid_next: 0,
+            })
+        }
+
+        async fn fetch_new(
+            &self,
+            _folder: &str,
+            since_uid: u32,
+            _since: Option<DateTime<Utc>>,
+        ) -> Result<Vec<RawMessage>, BackendError> {
+            if since_uid >= 1 {
+                return Ok(Vec::new());
+            }
+            Ok(vec![RawMessage {
+                uid: 1,
+                flags: vec![],
+                raw: self.message.clone(),
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn dot_dot_folder_name_does_not_escape_data_dir() {
+        let (store, account_id) = setup();
+        let engine = SyncEngine::new(store.clone());
+        let backend = DotDotBackend {
+            message: UTF8_ALT.to_vec(),
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let opts = SyncOptions {
+            only_folder: None,
+            since: None,
+            data_dir: tmp.path().to_path_buf(),
+        };
+
+        engine.sync_once(account_id, &backend, &opts).await.unwrap();
+
+        // data_dir 直下に .eml が出ていないこと（親ディレクトリへ抜けていないこと）。
+        for entry in std::fs::read_dir(tmp.path()).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            assert!(
+                !name.ends_with(".eml"),
+                "found .eml directly under data_dir: {name}"
+            );
+        }
+
+        // .eml は data_dir/<account_id>/ の下に（サニタイズされたフォルダ名で）出ていること。
+        let account_dir = tmp.path().join(account_id.to_string());
+        let mut found = false;
+        for entry in walk(&account_dir) {
+            if entry.extension().and_then(|e| e.to_str()) == Some("eml") {
+                found = true;
+                assert!(entry.starts_with(&account_dir));
+            }
+        }
+        assert!(found, "expected a .eml under {account_dir:?}");
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    out.extend(walk(&path));
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out
     }
 }
