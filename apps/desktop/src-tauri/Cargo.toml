@@ -1,0 +1,26 @@
+[package]
+name = "meowbox-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Meowbox desktop app (Tauri v2 shell)"
+publish = false
+
+[lib]
+# ロジックは lib に置き、main.rs は薄いエントリにする（テストから叩けるようにするため）。
+# モバイルは対象外なので staticlib / cdylib は作らない。
+name = "meowbox_desktop_lib"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+tauri.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# P3 で src/api/ のモックを invoke に差し替えるときにここから叩く。
+# 依存方向 core <- store を先に張っておき、逆流しないことを CI で担保する。
+mailcore = { path = "../../../crates/mailcore" }
+mailstore = { path = "../../../crates/mailstore" }

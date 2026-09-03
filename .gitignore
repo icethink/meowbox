@@ -6,3 +6,6 @@
 node_modules
 apps/desktop/src-tauri/target
 apps/desktop/dist
+
+# Tauri が生成する権限スキーマ
+apps/desktop/src-tauri/gen

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Meowbox のメインウィンドウに与える権限。必要最小限だけを足していく。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

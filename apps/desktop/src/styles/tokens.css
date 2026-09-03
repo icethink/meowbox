@@ -1,5 +1,5 @@
 /* Meowbox design tokens — extracted from Claude Design "メイン画面 (ダーク)" (2026-09-02)
-   このファイルが正。apps/desktop/src/styles/tokens.css は同じ内容のコピー。
+   正は docs/design/tokens.css。このファイルはその同期コピー（片方だけ直さない）。
    色・字・角丸は必ずこのファイルの変数経由で使う（HEX / rgba の直書き禁止）。
 
    テーマ切り替えの構造:
