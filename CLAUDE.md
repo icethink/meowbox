@@ -69,6 +69,14 @@ cargo run -p mailcli -- accounts list
 async-imap, tokio-rustls (or async-native-tls), mail-parser, mail-builder, lettre,
 oauth2, keyring, rmcp, reqwest。追加時は workspace.dependencies に集約する。
 
+## 作業の割り振り
+- メインは計画・判断・レビュー・報告だけを担当し、実作業は `.claude/agents/implementer.md` に 1 単位ずつ委譲する（メインは自分でファイルを編集しない。例外は 1〜2 行の修正）。
+- タスクは「仕様が決まっていて判断不要」な単位に分解する。設計が絡む単位（スキーマ変更・依存追加・公開範囲）はメインが方針を書いてから渡す。
+- implementer の報告を読んだら `.claude/agents/reviewer.md` に差分を見せ、指摘があれば implementer に差し戻す。「判断が必要」と返ってきたときだけメインが考える。
+- 3 回差し戻しても直らない単位は、その 1 回だけ `model: opus` を指定して implementer を呼び直し、どこで上位モデルを使ったかを result.md に書く。
+- サブエージェントへの指示は自己完結させる（会話の文脈は渡らない）。対象ファイル・期待する結果・検証コマンドを必ず含める。
+- 大きいログは全文を会話に貼らず、`Select-String` / `tail` で必要な行だけ読む。
+
 ## スタイル
 - コメントは日本語でよい。識別子は英語。
 - コミットメッセージは英語 1 行 + 必要なら日本語本文。
