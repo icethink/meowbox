@@ -53,7 +53,7 @@ Implement: `Meowbox Main Dark.dc.html` — as the main screen of the Meowbox des
 - `apps/desktop/src/types.ts` に、`crates/mailcore/src/lib.rs` の `Account` / `AccountKind` / `MessageSummary` / `Message` / `Address` / `Task` / `TaskStatus` / `Draft` に対応する TypeScript 型を定義する。フィールド名・enum 値は Rust 側の serde 表現（snake_case）に合わせる。P3 で Tauri invoke の戻り値をそのまま流し込めるようにするため。
 - UI 専用の派生型（スレッド一覧の 1 行、ダイジェスト項目など）は `types.ui.ts` に分け、コア型と混ぜない。
 - `apps/desktop/src/mock/` にデザインと同じサンプルデータを型付きで置く:
-  - 案件: 自社（me@my-company.example）、案件A（a-project@client-a.co.jp, a-project@gmail.com）、案件B（b@client-b.onmicrosoft.com）
+  - 案件: 自社（me@my-company.example）、案件A（a-project@client-a.example, a-project@gmail.example）、案件B（b@client-b.example）
   - スレッド: 「【至急】本番環境でエラー」佐藤 誠（要対応）、「Re: 見積の件」山田 太郎（選択中・4 通・添付 追加要件一覧.xlsx）、「9月定例のご案内」総務部 情報システム課、「Re: 商品画像の差し替えについて」鈴木 花子、「Weekly digest」GitLab、「8月分検収書のご送付」経理部 高橋
   - 「見積の件」の要約文、タスク「見積書を送る（9/5 確定）」「追加要件のヒアリング日程調整（候補・確度 62%）」、ダイジェストの内容もデザインの文言をそのまま使う
 - データアクセスは `src/api/` に `listAccounts()` / `listThreads()` / `getThread()` / `getDigest()` のような関数として切り、今はモックを返す。P3 でこの層だけを `invoke()` に差し替える。
