@@ -3,7 +3,8 @@ import { AppShell } from './components/layout/AppShell';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { ThreadList } from './components/list/ThreadList';
 import { ThreadRow } from './components/list/ThreadRow';
-import { mockThreads } from './mock/threads';
+import { ThreadView } from './components/thread/ThreadView';
+import { mockThreadDetails, mockThreads } from './mock/threads';
 import { mockViews } from './mock/accounts';
 import { useAppStore } from './store/app';
 
@@ -22,7 +23,17 @@ export default function App() {
     [archivedKeys, activeProjectTag, readKeys],
   );
 
+  const threadKeys = useMemo(() => threads.map((t) => t.thread_key), [threads]);
+  const selected = selectedThreadKey ? (mockThreadDetails[selectedThreadKey] ?? null) : null;
   const listTitle = mockViews.find((v) => v.key === activeView)?.label ?? 'すべて';
+
+  /** アーカイブしたら、その位置にあった次のスレッドへ選択を送る */
+  function handleArchive(key: string) {
+    const index = threadKeys.indexOf(key);
+    const after = threadKeys[index + 1] ?? threadKeys[index - 1];
+    archiveThread(key);
+    if (after) selectThread(after);
+  }
 
   return (
     <AppShell
@@ -35,13 +46,18 @@ export default function App() {
               thread={t}
               selected={t.thread_key === selectedThreadKey}
               onSelect={() => selectThread(t.thread_key)}
-              onArchive={() => archiveThread(t.thread_key)}
+              onArchive={() => handleArchive(t.thread_key)}
             />
           ))}
         </ThreadList>
       }
-      // TODO(P2): (4) でスレッド表示、(5) でダイジェストを入れる
-      thread={<section className="flex-1 bg-elevated" />}
+      thread={
+        <ThreadView
+          thread={selected}
+          onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
+        />
+      }
+      // TODO(P2): (5) でダイジェストを入れる
       panel={null}
     />
   );
