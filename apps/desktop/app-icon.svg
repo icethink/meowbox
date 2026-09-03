@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Meowbox</title>
+  <desc>猫耳つきの封筒。色は tokens.css の bg-base と accent。icons/ はこの SVG から pnpm tauri icon で生成する。</desc>
+  <rect width="1024" height="1024" rx="224" fill="#17181c"/>
+  <g transform="translate(512 512) scale(36) translate(-12 -12.5)">
+    <path d="M4 9 L4 5 L8 8 Z" fill="#e8a04c"/>
+    <path d="M20 9 L20 5 L16 8 Z" fill="#e8a04c"/>
+    <rect x="3" y="8" width="18" height="13" rx="3" fill="none" stroke="#e8a04c" stroke-width="1.6"/>
+    <path d="M4 10 L12 16 L20 10" fill="none" stroke="#e8a04c" stroke-width="1.6"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

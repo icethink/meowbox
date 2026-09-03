@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/* フォントはバンドルする（オフラインで動かすため Google Fonts へは繋がない） */
+@import '@fontsource/noto-sans-jp/400.css';
+@import '@fontsource/noto-sans-jp/500.css';
+@import '@fontsource/noto-sans-jp/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+
+/* Tailwind の後に読む: tokens.css の :root が Tailwind 既定のテーマ変数
+   （--font-sans / --radius-* など同名のもの）を上書きする。 */
+@import './tokens.css';
+
+/* トークン → Tailwind ユーティリティ。
+   `inline` にして生成物が var(--bg-app) を直に参照するようにする＝
+   [data-theme] を差し替えるだけで実行時に色が入れ替わる。
+   キー名は 2 つの理由で慎重に選ぶ:
+     1. tokens.css 側と同名にしない（:root で循環参照になる）
+     2. --text-* の文字サイズスケールと同名にしない。--color-base と --text-base が
+        両方あると text-base が色として解決され、文字サイズが効かなくなる。
+        そのため面の色は base ではなく surface と呼ぶ。 */
+@theme inline {
+  /* surfaces */
+  --color-app: var(--bg-app);
+  --color-surface: var(--bg-base);
+  --color-sidebar: var(--bg-sidebar);
+  --color-elevated: var(--bg-elevated);
+  --color-hover: var(--bg-hover);
+  --color-selected: var(--bg-selected);
+  --color-subtle: var(--bg-subtle);
+  --color-chip: var(--bg-chip);
+  --color-kbd: var(--bg-kbd);
+  --color-avatar: var(--bg-avatar);
+
+  /* lines */
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-line-soft: var(--border-soft);
+  --color-line-faint: var(--border-faint);
+  --color-line-input: var(--border-input);
+
+  /* text */
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-disabled: var(--text-disabled);
+  --color-placeholder: var(--text-placeholder);
+  --color-body: var(--text-body);
+  --color-body-strong: var(--text-body-strong);
+
+  /* accent — 人間側（送信・選択・要対応・フラグ） */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-bg-soft: var(--accent-bg-soft);
+  --color-accent-bg-subtle: var(--accent-bg-subtle);
+  --color-accent-ring: var(--accent-ring);
+  --color-accent-on: var(--accent-text-on);
+
+  /* ai — Claude 由来（要約・AI タスク・AI 下書き） */
+  --color-ai: var(--ai);
+  --color-ai-muted: var(--ai-muted);
+  --color-ai-text: var(--ai-text);
+  --color-ai-text-muted: var(--ai-text-muted);
+  --color-ai-bg: var(--ai-bg);
+  --color-ai-bg-strong: var(--ai-bg-strong);
+  --color-ai-bg-hover: var(--ai-bg-hover);
+  --color-ai-bg-active: var(--ai-bg-active);
+  --color-ai-line: var(--ai-border);
+  --color-ai-line-strong: var(--ai-border-strong);
+
+  /* semantic */
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-line: var(--danger-border);
+
+  /* font-size (--fs-* → text-*)
+     --text-<key>--line-height も必ず一緒に指定する。省くと Tailwind 既定の
+     サイズ別 line-height（text-base なら 1.5）が効いてしまい、
+     デザインの 1.6 より行が詰まる。行間を変えたいところは leading-* で上書きする。 */
+  --text-9-5: var(--fs-9-5);
+  --text-9-5--line-height: var(--lh);
+  --text-2xs: var(--fs-2xs);
+  --text-2xs--line-height: var(--lh);
+  --text-xs: var(--fs-xs);
+  --text-xs--line-height: var(--lh);
+  --text-11: var(--fs-11);
+  --text-11--line-height: var(--lh);
+  --text-sm: var(--fs-sm);
+  --text-sm--line-height: var(--lh);
+  --text-12: var(--fs-12);
+  --text-12--line-height: var(--lh);
+  --text-base: var(--fs-base);
+  --text-base--line-height: var(--lh);
+  --text-md: var(--fs-md);
+  --text-md--line-height: var(--lh);
+  --text-lg: var(--fs-lg);
+  --text-lg--line-height: var(--lh);
+  --text-xl: var(--fs-xl);
+  --text-xl--line-height: var(--lh);
+
+  /* line-height (--lh* → leading-*) */
+  --leading-normal: var(--lh);
+  --leading-relaxed: var(--lh-relaxed);
+  --leading-loose: var(--lh-loose);
+  --leading-body: var(--lh-body);
+
+  /* letter-spacing (--tracking* → tracking-*) */
+  --tracking-body: var(--tracking);
+  --tracking-w2: var(--tracking-2);
+  --tracking-w4: var(--tracking-4);
+  --tracking-w6: var(--tracking-6);
+  --tracking-caps: var(--tracking-label);
+}
+
+/* --radius-xs / -sm / -md / -lg は tokens.css が Tailwind 既定を上書きするので
+   rounded-xs / -sm / -md / -lg はそのまま使える。名前の無い 2 つだけ足す。 */
+@utility rounded-token {
+  border-radius: var(--radius);
+}
+@utility rounded-pill {
+  border-radius: var(--radius-pill);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg-app);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--fs-md);
+    line-height: var(--lh);
+    letter-spacing: var(--tracking);
+    -webkit-font-smoothing: antialiased;
+    /* デスクトップアプリなので選択とドラッグは既定で殺す（本文だけ後から戻す） */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-xs);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* キーボード操作のときだけフォーカスリングを出す */
+  :focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  /* メール本文・要約などの読み物はコピーできるようにする */
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}

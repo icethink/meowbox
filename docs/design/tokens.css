@@ -1,5 +1,11 @@
 /* Meowbox design tokens — extracted from Claude Design "メイン画面 (ダーク)" (2026-09-02)
-   ライトテーマは未デザイン。ダークの値を正として、ライトは後で追加する。 */
+   このファイルが正。apps/desktop/src/styles/tokens.css は同じ内容のコピー。
+   色・字・角丸は必ずこのファイルの変数経由で使う（HEX / rgba の直書き禁止）。
+
+   テーマ切り替えの構造:
+     :root                  … ダーク（唯一デザイン済み）
+     [data-theme="light"]   … ライト（未デザイン。値だけ差し替えれば動く）
+   変数名は両テーマで共通。名前は増やしてよいが、意味は変えない。 */
 :root {
   /* --- surfaces --- */
   --bg-app: #0e0f11;          /* ウィンドウ背景 */
@@ -55,4 +61,43 @@
 
   /* --- layout --- */
   --w-sidebar: 220px;  --w-list: 390px;  --w-panel: 300px;
+
+  /* ================================================================
+     ここから下は実装で必要になった追加トークン（docs/design/tokens.css にも同じ名前で入れる）
+     ================================================================ */
+
+  /* --- surfaces (追加) --- */
+  --bg-chip: rgba(255,255,255,.06);    /* 案件タグ・ヘッダのボタン面 */
+  --bg-kbd: rgba(255,255,255,.07);     /* ⌘K などのキー表示 */
+  --bg-avatar: #2a2c33;                /* 差出人イニシャルの円 */
+  --border-soft: rgba(255,255,255,.08);/* タスク行・ボタンの枠 */
+  --border-faint: rgba(255,255,255,.04);/* 一覧の行区切り */
+  --scrollbar-thumb: rgba(255,255,255,.08);
+
+  /* --- text (追加) --- */
+  --text-body: #b8b5ae;                /* 既読メッセージ本文 */
+  --text-body-strong: #e0ddd6;         /* 最新メッセージ本文 */
+
+  /* --- accent / AI (追加) --- */
+  --accent-bg-soft: rgba(232,160,76,.1);   /* 有効なフィルタチップ */
+  --accent-text-on: #17181c;               /* accent 面に載せる文字 */
+  --ai-bg-hover: rgba(167,155,234,.12);
+  --ai-bg-active: rgba(167,155,234,.25);
+
+  /* --- typography (追加) --- 数字はそのまま px。t シャツ表記の隙間を埋める中間サイズ */
+  --fs-9-5: 9.5px;  --fs-11: 11px;  --fs-12: 12px;
+  --lh-relaxed: 1.7;  --lh-loose: 1.75;  --lh-body: 1.8;
+  --tracking-2: .02em;  --tracking-4: .04em;  --tracking-6: .06em;
+
+  /* --- shape (追加) --- */
+  --radius-lg: 10px;   /* ウィンドウ外周 */
+
+  /* --- layout (追加) --- */
+  --w-accent-bar: 3px; /* 一覧の左アクセントバー */
 }
+
+/* ライトテーマは未デザイン。値を入れれば data-theme="light" で切り替わる。
+[data-theme="light"] {
+  --bg-app: …;
+}
+*/

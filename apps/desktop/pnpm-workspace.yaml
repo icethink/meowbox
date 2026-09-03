@@ -1,0 +1,4 @@
+# pnpm 11 の設定はここに置く（package.json の "pnpm" フィールドは読まれない）。
+# インストール時のビルドスクリプトは既定でブロックされるので、必要なものだけ許可する。
+allowBuilds:
+  esbuild: true

@@ -5,7 +5,6 @@ Claude Design で作った Meowbox の UI デザイン。
 | ファイル | 内容 |
 |---|---|
 | `main-dark.png` | メイン画面（ダーク）のスクリーンショット。実装時の見本 |
-| `main-dark.reference.html` | 同画面の HTML ソース（インラインスタイル、React 不要で構造が読める）。実装時の寸法・色・余白の参照用 |
 | `tokens.css` | 上記から抽出したデザイントークン。`apps/desktop/src/styles/tokens.css` にそのまま置く想定 |
 
 Claude Design の元ファイル（.html バンドル）は `メール管理/design/` に置いてある（リポジトリには含めない: 7MB）。
