@@ -68,7 +68,8 @@ export function ReplyBox({ threadKey, placeholder }: { threadKey: string; placeh
         placeholder={placeholder}
         aria-label="返信本文"
         rows={body ? 5 : 1}
-        className={`selectable min-h-[40px] resize-none rounded-md border px-[12px] py-[10px] text-base leading-body outline-none placeholder:text-faint ${
+        // 空のときの高さはデザインどおり 62px（本文 1 行 + 上下 10px + 枠）
+        className={`selectable min-h-[62px] resize-none rounded-md border px-[12px] py-[10px] text-base leading-body outline-none placeholder:text-faint ${
           isUneditedAiDraft
             ? 'border-ai-line-strong bg-ai-bg text-ai-text'
             : 'border-line-strong text-primary'
