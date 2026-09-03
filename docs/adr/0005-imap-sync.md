@@ -11,9 +11,13 @@ P0-b で汎用 IMAP 1 アカウントの INBOX（直近 90 日）を SQLite に�
 
 ## 決定
 
-**クレート** — `async-imap`（TLS 993 と STARTTLS 143 の両対応）、TLS は `tokio-rustls`
-＋ `webpki-roots`、tokio と async-imap の AsyncRead/AsyncWrite の差は `tokio-util` の
-`compat()` で埋める。パースは `mail-parser`（日本語エンコーディングを内包するので
+**クレート** — `async-imap`（TLS 993 と STARTTLS 143 の両対応）は既定の
+`runtime-async-std` を切り `runtime-tokio` フィーチャを有効にすることで
+tokio の AsyncRead/AsyncWrite とそのまま噛み合わせる（`tokio-util` の
+`compat()` は使わない）。TLS は `tokio-rustls` ＋ `webpki-roots`。
+`tokio-rustls` は既定の暗号バックエンド（`aws-lc-rs`）ではなく
+`default-features = false, features = ["ring", "tls12", "logging"]` で `ring` を使う。
+パースは `mail-parser`（日本語エンコーディングを内包するので
 `encoding_rs` は足さない）。秘密情報は `keyring`、対話入力は `rpassword`。
 
 **`MailBackend` を 2 点広げる**（`mailcore`）。UIDVALIDITY と 90 日の窓を
@@ -50,6 +54,8 @@ SINCE <90日前>` → 200 件ずつ `UID FETCH (UID FLAGS RFC822)` → raw を
   実アカウントでは必ず変なメールが来る前提で作る
 - 引用と署名を落とした本文を持つと FTS の精度と要約の質が上がる。落とした分が
   必要になったら `raw_path` の `.eml` を読み直せばよく、DB に二重に持たなくてよい
+- `tokio-rustls` の既定 `aws-lc-rs` は cmake と nasm を要求し CI（windows/ubuntu）で
+  ビルドが落ちる。`ring` は追加ツールなしでビルドできるため優先した
 
 ## 結果
 
