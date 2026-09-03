@@ -8,7 +8,7 @@ Meowbox は Rust 製の AI フレンドリーなメーラー。案件ごとに�
 - `docs/DESIGN.md` — アーキテクチャ・スキーマ・MCP ツール一覧・ロードマップ
 - `crates/mailcore/src/lib.rs` — ドメイン型と `MailBackend` トレイト
 - `crates/mailstore/src/schema.sql` — DB スキーマ（正）
-- `docs/design/` — UI デザイン（`main-dark.png` が見本、`tokens.css` が色/字/余白の正、`main-dark.reference.html` が寸法参照、`impl-main-dark.png` が実装の現状）
+- `docs/design/` — UI デザイン（`main-dark.png` が見本、`tokens.css` が色/字/余白の正、`impl-main-dark.png` が実装の現状）
 - `docs/adr/` — 設計判断の記録。方針を変えるときは ADR を足してから実装する
 - `apps/desktop/src/api/` — UI から見た唯一のデータ入口。P3 でここだけ `invoke()` に差し替える
 
