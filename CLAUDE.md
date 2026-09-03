@@ -51,13 +51,13 @@ cargo run -p mailcli -- accounts list
 10. UI から DB / IPC を直接叩かない。データ取得は `apps/desktop/src/api/` の関数だけを通す。
 
 ## 現在のフェーズと次の一手
-実装順は P0-b → P3 → P1。P1 の MCP は実データが入ってから着手する。
+P0-b まで完了。次は P3。P1 の MCP は実データが入ってから着手する。
 - [x] P0-a: workspace 雛形、スキーマ、`meowbox init / accounts / search`
 - [x] P2: Tauri UI（AppShell / Sidebar / ThreadList / ThreadView / DigestPanel、
       キーボード操作、モックデータ）— 2026-09-03
-- [ ] P0-b: `mailsync::imap` を async-imap で実装、`parse` を mail-parser で実装、`meowbox sync` を動かす
+- [x] P0-b: `mailsync::imap` を async-imap で実装、`parse` を mail-parser で実装、`meowbox sync` を動かす
       （最初のターゲット: 汎用 IMAP 1 アカウント、INBOX の直近 90 日）
-      normalize_subject に RE: / Re[2]: / FW: / 返信：（全角）などを含むテストを追加する
+      normalize_subject に RE: / Re[2]: / FW: / 返信：（全角）などを含むテストを追加する — 2026-09-04
 - [ ] P3: `apps/desktop/src/api/` のモックを Tauri invoke → mailstore に差し替える。
       `listAccounts / listProjects / listThreads / getThread / getDigest / createDraft` を
       `#[tauri::command]` として `src-tauri` に実装し、UI 側は `src/api/` の中身だけを

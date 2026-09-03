@@ -129,7 +129,7 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 | フェーズ | 内容 | 状態 |
 |---|---|---|
 | P0-a | workspace 雛形、mailstore スキーマ、`meowbox init / accounts / search` | ✅ 2026-09-02 |
-| P0-b | mailsync で IMAP 同期 → SQLite。手元の IMAP アカウントで動作確認 | 次 |
+| P0-b | mailsync で IMAP 同期 → SQLite。手元の IMAP アカウントで動作確認 | ✅ 2026-09-04 |
 | P1 | mailmcp: `list_accounts` `search_messages` `get_thread` `inbox_digest`。Cowork から叩けることを確認 | ここで Thunderbird MCP を卒業 |
 | P2 | Tauri UI: アカウント一覧・スレッド表示・検索・タスク一覧 | ✅ 2026-09-03 |
 | P3 | 要約・タスク抽出（MCP経由とアプリ内API呼び出しの両方）、`create_draft`、UI で承認送信 | MVP 完成 |
