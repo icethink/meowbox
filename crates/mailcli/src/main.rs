@@ -169,6 +169,46 @@ fn imap_config_from_account(a: &mailcore::Account) -> Result<ImapConfig, SkipRea
     })
 }
 
+/// `sync` サブコマンド 1 回分の集計（試行数・失敗数・スキップ数）。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SyncOutcome {
+    /// 同期を実際に試みたアカウント数（設定不備でのスキップは含まない）。
+    attempted: usize,
+    /// `attempted` のうち同期に失敗した数。
+    failed: usize,
+    /// host 未設定・非 imap で同期対象外としたアカウント数。
+    skipped: usize,
+}
+
+/// 集計から `sync` の終了結果を決める。
+/// - `Ok(Some(summary))`: 成功。複数アカウントを回った場合はサマリ文字列付き。
+/// - `Ok(None)`: 成功。1 アカウントのみ（追加のサマリ行は出さない）。
+/// - `Err(message)`: 非ゼロ終了すべき理由。
+fn sync_exit_result(o: &SyncOutcome) -> Result<Option<String>, String> {
+    if o.attempted == 0 {
+        return Err(if o.skipped > 0 {
+            "no accounts to sync (all accounts were skipped — check --account id, kind, host)"
+                .to_string()
+        } else {
+            "no accounts to sync".to_string()
+        });
+    }
+    if o.failed > 0 {
+        return Err(format!(
+            "sync failed for {} of {} account(s)",
+            o.failed, o.attempted
+        ));
+    }
+    if o.attempted > 1 {
+        Ok(Some(format!(
+            "synced {} account(s), {} failed",
+            o.attempted, o.failed
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -262,11 +302,14 @@ async fn main() -> Result<()> {
             let engine = SyncEngine::new(store.clone());
             let since = Utc::now() - Duration::days(days);
 
+            let mut outcome = SyncOutcome::default();
+
             for a in targets {
                 let config = match imap_config_from_account(&a) {
                     Ok(config) => config,
                     Err(reason) => {
                         eprintln!("{}", reason.message(a.id));
+                        outcome.skipped += 1;
                         continue;
                     }
                 };
@@ -278,13 +321,23 @@ async fn main() -> Result<()> {
                     data_dir: PathBuf::from("data/mail"),
                 };
 
+                outcome.attempted += 1;
                 match engine.sync_once(a.id, &backend, &opts).await {
                     Ok(report) => println!(
                         "account #{}: fetched={} inserted={} skipped={} errors={}",
                         a.id, report.fetched, report.inserted, report.skipped, report.errors
                     ),
-                    Err(e) => eprintln!("account #{}: sync failed: {e}", a.id),
+                    Err(e) => {
+                        eprintln!("account #{}: sync failed: {e}", a.id);
+                        outcome.failed += 1;
+                    }
                 }
+            }
+
+            match sync_exit_result(&outcome) {
+                Ok(Some(summary)) => println!("{summary}"),
+                Ok(None) => {}
+                Err(message) => anyhow::bail!(message),
             }
         }
         Cmd::Search {
@@ -421,5 +474,55 @@ mod tests {
         );
         let config = imap_config_from_account(&a).unwrap();
         assert_eq!(config.port, 993);
+    }
+
+    #[test]
+    fn sync_all_accounts_succeed_is_ok() {
+        let o = SyncOutcome {
+            attempted: 2,
+            failed: 0,
+            skipped: 0,
+        };
+        assert!(sync_exit_result(&o).is_ok());
+    }
+
+    #[test]
+    fn sync_some_accounts_fail_is_err() {
+        let o = SyncOutcome {
+            attempted: 2,
+            failed: 1,
+            skipped: 0,
+        };
+        assert!(sync_exit_result(&o).is_err());
+    }
+
+    #[test]
+    fn sync_all_accounts_fail_is_err() {
+        let o = SyncOutcome {
+            attempted: 1,
+            failed: 1,
+            skipped: 0,
+        };
+        assert!(sync_exit_result(&o).is_err());
+    }
+
+    #[test]
+    fn sync_no_targets_at_all_is_err() {
+        let o = SyncOutcome {
+            attempted: 0,
+            failed: 0,
+            skipped: 0,
+        };
+        assert!(sync_exit_result(&o).is_err());
+    }
+
+    #[test]
+    fn sync_no_targets_but_some_skipped_is_err() {
+        let o = SyncOutcome {
+            attempted: 0,
+            failed: 0,
+            skipped: 2,
+        };
+        assert!(sync_exit_result(&o).is_err());
     }
 }
