@@ -35,3 +35,4 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 webpki-roots = "1.0.9"
 futures = "0.3.34"
 keyring = "4.2.0"
+rpassword = "7.5.4"
