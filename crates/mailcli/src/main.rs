@@ -17,7 +17,11 @@ use mailcore::AccountKind;
 use mailstore::{SearchQuery, Store};
 
 #[derive(Parser)]
-#[command(name = "meowbox", version, about = "Meowbox — AI-friendly mail aggregator")]
+#[command(
+    name = "meowbox",
+    version,
+    about = "Meowbox — AI-friendly mail aggregator"
+)]
 struct Cli {
     /// SQLite DB のパス
     #[arg(long, env = "MEOWBOX_DB", default_value = "data/meowbox.db")]
@@ -81,8 +85,7 @@ enum AccountsCmd {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 

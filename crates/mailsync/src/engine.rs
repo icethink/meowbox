@@ -25,11 +25,17 @@ impl SyncEngine {
     }
 
     /// 1 アカウントを 1 回だけ同期する（デーモン化は呼び出し側）。
-    pub async fn sync_once(&self, account_id: i64, backend: &dyn MailBackend) -> Result<SyncReport> {
+    pub async fn sync_once(
+        &self,
+        account_id: i64,
+        backend: &dyn MailBackend,
+    ) -> Result<SyncReport> {
         let folders = backend.list_folders().await?;
         let mut report = SyncReport::default();
         for (path, role) in folders {
-            let folder_id = self.store.ensure_folder(account_id, &path, role_str(role))?;
+            let folder_id = self
+                .store
+                .ensure_folder(account_id, &path, role_str(role))?;
             let last_uid = self.store.folder_last_uid(folder_id)?;
             let raws = backend.fetch_new(&path, last_uid).await?;
             for raw in raws {

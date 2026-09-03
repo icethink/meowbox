@@ -42,7 +42,9 @@ impl Store {
     }
 
     fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(SCHEMA_SQL).context("apply schema")?;
+        self.conn
+            .execute_batch(SCHEMA_SQL)
+            .context("apply schema")?;
         let current: Option<String> = self
             .conn
             .query_row(
@@ -220,9 +222,8 @@ impl Store {
             args.push(Box::new(a));
         }
         if let Some(tag) = q.project_tag {
-            where_clauses.push(
-                "m.account_id IN (SELECT id FROM accounts WHERE project_tag = ?)".into(),
-            );
+            where_clauses
+                .push("m.account_id IN (SELECT id FROM accounts WHERE project_tag = ?)".into());
             args.push(Box::new(tag.to_string()));
         }
         if let Some(since) = q.since {
