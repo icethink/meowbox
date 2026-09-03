@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use mailcore::{Account, AccountKind, Address, MessageSummary};
+use mailcore::{Account, AccountKind, Address, Message, MessageSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const SCHEMA_VERSION: i64 = 1;
@@ -304,6 +304,50 @@ impl Store {
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
+
+    /// 1 通を本文つきで取得する。`folder_path` は folders を join して埋める。
+    /// 見つからなければ `Ok(None)`。
+    pub fn get_message(&self, id: i64) -> Result<Option<Message>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT m.id, m.account_id, f.path, m.uid, m.message_id, m.thread_key,
+                        m.from_addr, m.from_name, m.to_json, m.cc_json, m.subject, m.date,
+                        m.snippet, m.body_text, m.has_attachments, m.is_read, m.is_flagged
+                 FROM messages m
+                 JOIN folders f ON f.id = m.folder_id
+                 WHERE m.id = ?1",
+                params![id],
+                |r| {
+                    let to_json: String = r.get(8)?;
+                    let cc_json: String = r.get(9)?;
+                    let date: String = r.get(11)?;
+                    Ok(Message {
+                        id: r.get(0)?,
+                        account_id: r.get(1)?,
+                        folder_path: r.get(2)?,
+                        uid: r.get::<_, i64>(3)? as u32,
+                        message_id: r.get(4)?,
+                        thread_key: r.get(5)?,
+                        from: Address {
+                            email: r.get(6)?,
+                            name: r.get(7)?,
+                        },
+                        to: serde_json::from_str(&to_json).unwrap_or_default(),
+                        cc: serde_json::from_str(&cc_json).unwrap_or_default(),
+                        subject: r.get(10)?,
+                        date: parse_ts(&date),
+                        snippet: r.get(12)?,
+                        body_text: r.get(13)?,
+                        has_attachments: r.get::<_, i64>(14)? != 0,
+                        is_read: r.get::<_, i64>(15)? != 0,
+                        is_flagged: r.get::<_, i64>(16)? != 0,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
 }
 
 /// `insert_message` の入力。所有権を取らないので同期ループで使いやすい。
@@ -481,6 +525,47 @@ mod tests {
 
         store.reset_folder_uid(folder_id).unwrap();
         assert_eq!(store.folder_last_uid(folder_id).unwrap(), 0);
+    }
+
+    #[test]
+    fn get_message_roundtrips_and_returns_none_when_missing() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: Some("山田".into()),
+            email: "yamada@client-a.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid: 9,
+            message_id: Some("<a@b>"),
+            thread_key: "見積の件",
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject: "Re: 見積の件",
+            date: Utc::now(),
+            snippet: "お世話になっております",
+            body_text: "お世話になっております。見積書を添付いたします。",
+            body_html: None,
+            has_attachments: true,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        let id = store.insert_message(&m).unwrap().unwrap();
+
+        let fetched = store.get_message(id).unwrap().unwrap();
+        assert_eq!(fetched.subject, "Re: 見積の件");
+        assert_eq!(
+            fetched.body_text,
+            "お世話になっております。見積書を添付いたします。"
+        );
+        assert_eq!(fetched.folder_path, "INBOX");
+        assert_eq!(fetched.uid, 9);
+
+        assert!(store.get_message(id + 1000).unwrap().is_none());
     }
 
     #[test]
