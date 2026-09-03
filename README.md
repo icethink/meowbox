@@ -68,9 +68,20 @@ cargo test --workspace
 # デバッグ用 CLI
 cargo run -p mailcli -- init
 cargo run -p mailcli -- accounts add --name work --email you@example.com \
-    --project 案件A --host imap.example.com
+    --project 案件A --host imap.example.com --username you@example.com
+# 暗黙 TLS（既定 993）の代わりに STARTTLS（143 など）を使う場合は --starttls を足す
 cargo run -p mailcli -- accounts list
+
+# パスワードは対話入力で OS の資格情報ストア（Windows なら資格情報マネージャー）に保存する。
+# DB にも設定ファイルにも書かれない
+cargo run -p mailcli -- accounts set-password 1
+
+# 直近 90 日（既定）を同期。2 回目以降は前回からの UID 差分だけ取る
+cargo run -p mailcli -- sync --account 1 --folder INBOX
+cargo run -p mailcli -- sync --account 1 --folder INBOX --days 30
+
 cargo run -p mailcli -- search "見積" --project 案件A
+cargo run -p mailcli -- show 42
 
 # デスクトップアプリ
 cd apps/desktop
