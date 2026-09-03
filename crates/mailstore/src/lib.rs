@@ -338,7 +338,7 @@ mod tests {
         let (account_id, folder_id) = seed(&store);
         let from = Address {
             name: Some("山田".into()),
-            email: "yamada@client.jp".into(),
+            email: "yamada@client-a.example".into(),
         };
         let m = NewMessage {
             account_id,
