@@ -1,12 +1,12 @@
-import { CheckSquare, Circle, Diamond, Dot, Flag, PencilLine } from 'lucide-react';
+import { Circle, CircleDot, Diamond, Flag, PencilLine, SquareCheck } from 'lucide-react';
 import type { ViewItemView, ViewKey } from '../../types.ui';
 
 const icons: Record<ViewKey, typeof Circle> = {
-  all: Dot,
+  all: CircleDot,
   unread: Circle,
   action: Diamond,
   flagged: Flag,
-  tasks: CheckSquare,
+  tasks: SquareCheck,
   drafts: PencilLine,
 };
 
@@ -42,7 +42,8 @@ export function ViewItem({
         size={13}
         strokeWidth={2}
         className={view.tone ? tone : 'text-muted'}
-        fill={view.key === 'all' || view.key === 'action' ? 'currentColor' : 'none'}
+        // 要対応の ◆ だけ塗る。それ以外は線のまま
+        fill={view.key === 'action' ? 'currentColor' : 'none'}
       />
       <span className="flex-1 text-left">{view.label}</span>
       <span className={`font-mono text-xs ${tone}`}>{view.count}</span>

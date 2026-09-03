@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
-import type { ThreadListItem } from '../../types.ui';
 import { useAppStore } from '../../store/app';
 
 function FilterChip({
@@ -38,11 +37,12 @@ function ShortcutHint({ keys, label }: { keys: string; label: string }) {
 
 export function ThreadList({
   title,
-  threads,
+  count,
   children,
 }: {
   title: string;
-  threads: ThreadListItem[];
+  /** ビューが持つスレッド総数。モックが読み込んでいる件数とは別物 */
+  count: number;
   /** 行の描画は呼び出し側に任せる（選択とキーボード操作を App 側で持つため） */
   children: ReactNode;
 }) {
@@ -51,12 +51,12 @@ export function ThreadList({
   return (
     <section
       aria-label="スレッド一覧"
-      className="flex w-[var(--w-list)] shrink-0 flex-col border-r border-line bg-base"
+      className="flex w-[var(--w-list)] shrink-0 flex-col border-r border-line bg-surface"
     >
       <header className="flex flex-col gap-[9px] border-b border-line px-[14px] pt-[12px] pb-[10px]">
         <div className="flex items-baseline gap-[8px]">
           <h2 className="text-lg font-bold">{title}</h2>
-          <span className="font-mono text-11 text-faint">{threads.length} スレッド</span>
+          <span className="font-mono text-11 text-faint">{count} スレッド</span>
         </div>
         <div className="flex gap-[6px]">
           <FilterChip

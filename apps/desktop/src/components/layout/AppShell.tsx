@@ -20,7 +20,7 @@ export function AppShell({
 }) {
   return (
     <div className="h-full bg-app">
-      <div className="flex h-full overflow-hidden rounded-lg border border-line bg-base text-primary">
+      <div className="flex h-full overflow-hidden rounded-lg border border-line bg-surface text-primary">
         {/* 900px を切ったらサイドバーを畳む */}
         <div className="contents max-[900px]:hidden">{sidebar}</div>
         {list}

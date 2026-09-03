@@ -14,11 +14,15 @@
 /* トークン → Tailwind ユーティリティ。
    `inline` にして生成物が var(--bg-app) を直に参照するようにする＝
    [data-theme] を差し替えるだけで実行時に色が入れ替わる。
-   キー名は tokens.css 側と衝突しないもの（循環参照を避ける）。 */
+   キー名は 2 つの理由で慎重に選ぶ:
+     1. tokens.css 側と同名にしない（:root で循環参照になる）
+     2. --text-* の文字サイズスケールと同名にしない。--color-base と --text-base が
+        両方あると text-base が色として解決され、文字サイズが効かなくなる。
+        そのため面の色は base ではなく surface と呼ぶ。 */
 @theme inline {
   /* surfaces */
   --color-app: var(--bg-app);
-  --color-base: var(--bg-base);
+  --color-surface: var(--bg-base);
   --color-sidebar: var(--bg-sidebar);
   --color-elevated: var(--bg-elevated);
   --color-hover: var(--bg-hover);

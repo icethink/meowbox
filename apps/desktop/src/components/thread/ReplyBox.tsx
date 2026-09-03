@@ -53,7 +53,7 @@ export function ReplyBox({ threadKey, placeholder }: { threadKey: string; placeh
   }
 
   return (
-    <div className="flex flex-col gap-[9px] border-t border-line bg-base px-[20px] pt-[12px] pb-[14px]">
+    <div className="flex flex-col gap-[9px] border-t border-line bg-surface px-[20px] pt-[12px] pb-[14px]">
       {isUneditedAiDraft && (
         <div className="flex items-center gap-[6px] text-11 text-ai">
           <Sparkles size={11} strokeWidth={2} aria-hidden="true" />

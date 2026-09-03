@@ -38,7 +38,11 @@ export default function App() {
   useKeyboardShortcuts({ threadKeys, selectedThreadKey });
 
   const selected = selectedThreadKey ? (mockThreadDetails[selectedThreadKey] ?? null) : null;
-  const listTitle = mockViews.find((v) => v.key === activeView)?.label ?? 'すべて';
+  const view = mockViews.find((v) => v.key === activeView);
+  const listTitle = view?.label ?? 'すべて';
+  // 案件で絞っているときは実件数、そうでなければビューの総数を出す
+  // （モックは 24 スレッドのうち先頭 6 件だけを持っている）
+  const listCount = activeProjectTag ? threads.length : (view?.count ?? threads.length);
 
   /** アーカイブしたら、その位置にあった次のスレッドへ選択を送る */
   function handleArchive(key: string) {
@@ -53,7 +57,7 @@ export default function App() {
       <AppShell
         sidebar={<Sidebar />}
         list={
-          <ThreadList title={listTitle} threads={threads}>
+          <ThreadList title={listTitle} count={listCount}>
             {threads.map((t) => (
               <ThreadRow
                 key={t.thread_key}
