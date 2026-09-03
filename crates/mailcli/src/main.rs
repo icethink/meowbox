@@ -111,6 +111,64 @@ enum AccountsCmd {
     },
 }
 
+/// アカウントを同期できない理由。
+#[derive(Debug, PartialEq, Eq)]
+enum SkipReason {
+    /// `kind` が imap ではない（gmail / m365 は未対応）。
+    NotImap { kind: &'static str },
+    /// imap アカウントだが `settings.host` が無い。
+    NoHost,
+}
+
+impl SkipReason {
+    fn message(&self, account_id: mailcore::AccountId) -> String {
+        match self {
+            SkipReason::NotImap { kind } => {
+                format!("account #{account_id}: kind '{kind}' not supported yet")
+            }
+            SkipReason::NoHost => format!("account #{account_id}: has no host configured"),
+        }
+    }
+}
+
+/// アカウント設定から `ImapConfig` を組み立てる。同期できないアカウントは
+/// 飛ばす理由を返す。
+fn imap_config_from_account(a: &mailcore::Account) -> Result<ImapConfig, SkipReason> {
+    if a.kind != AccountKind::Imap {
+        return Err(SkipReason::NotImap {
+            kind: a.kind.as_str(),
+        });
+    }
+    let host = a
+        .settings
+        .get("host")
+        .and_then(|v| v.as_str())
+        .ok_or(SkipReason::NoHost)?;
+    let port = a
+        .settings
+        .get("port")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(993) as u16;
+    let username = a
+        .settings
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&a.email);
+    let starttls = a
+        .settings
+        .get("starttls")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    Ok(ImapConfig {
+        account_id: a.id,
+        host: host.to_string(),
+        port,
+        username: username.to_string(),
+        starttls,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -205,42 +263,15 @@ async fn main() -> Result<()> {
             let since = Utc::now() - Duration::days(days);
 
             for a in targets {
-                if a.kind != AccountKind::Imap {
-                    eprintln!(
-                        "account #{}: kind '{}' not supported yet",
-                        a.id,
-                        a.kind.as_str()
-                    );
-                    continue;
-                }
-                let host = a.settings.get("host").and_then(|v| v.as_str());
-                let Some(host) = host else {
-                    eprintln!("account #{}: has no host configured", a.id);
-                    continue;
+                let config = match imap_config_from_account(&a) {
+                    Ok(config) => config,
+                    Err(reason) => {
+                        eprintln!("{}", reason.message(a.id));
+                        continue;
+                    }
                 };
-                let port = a
-                    .settings
-                    .get("port")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(993) as u16;
-                let username = a
-                    .settings
-                    .get("username")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&a.email);
-                let starttls = a
-                    .settings
-                    .get("starttls")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
 
-                let backend = ImapBackend::new(ImapConfig {
-                    account_id: a.id,
-                    host: host.to_string(),
-                    port,
-                    username: username.to_string(),
-                    starttls,
-                });
+                let backend = ImapBackend::new(config);
                 let opts = SyncOptions {
                     only_folder: folder.clone(),
                     since: Some(since),
@@ -311,4 +342,84 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mailcore::Account;
+
+    /// テスト用の `Account` を組み立てる。アドレスは RFC 2606 の `.example` のみ使う。
+    fn account(kind: AccountKind, settings: serde_json::Value) -> Account {
+        Account {
+            id: 1,
+            name: "test".to_string(),
+            kind,
+            email: "me@mail.example".to_string(),
+            project_tag: None,
+            settings,
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn non_imap_account_is_skipped_as_not_imap() {
+        let a = account(AccountKind::Gmail, serde_json::json!({}));
+        match imap_config_from_account(&a) {
+            Err(SkipReason::NotImap { kind }) => assert_eq!(kind, "gmail"),
+            other => panic!("expected NotImap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn imap_account_without_host_is_skipped_as_no_host() {
+        let a = account(AccountKind::Imap, serde_json::json!({}));
+        match imap_config_from_account(&a) {
+            Err(SkipReason::NoHost) => {}
+            other => panic!("expected NoHost, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn imap_account_with_full_settings_builds_config() {
+        let a = account(
+            AccountKind::Imap,
+            serde_json::json!({
+                "host": "imap.mail.example",
+                "port": 143,
+                "username": "someone@mail.example",
+                "starttls": true,
+            }),
+        );
+        let config = imap_config_from_account(&a).unwrap();
+        assert_eq!(config.account_id, 1);
+        assert_eq!(config.host, "imap.mail.example");
+        assert_eq!(config.port, 143);
+        assert_eq!(config.username, "someone@mail.example");
+        assert!(config.starttls);
+    }
+
+    #[test]
+    fn imap_account_without_username_falls_back_to_email() {
+        let a = account(
+            AccountKind::Imap,
+            serde_json::json!({
+                "host": "imap.mail.example",
+            }),
+        );
+        let config = imap_config_from_account(&a).unwrap();
+        assert_eq!(config.username, "me@mail.example");
+    }
+
+    #[test]
+    fn imap_account_without_port_defaults_to_993() {
+        let a = account(
+            AccountKind::Imap,
+            serde_json::json!({
+                "host": "imap.mail.example",
+            }),
+        );
+        let config = imap_config_from_account(&a).unwrap();
+        assert_eq!(config.port, 993);
+    }
 }
