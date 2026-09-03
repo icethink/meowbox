@@ -126,11 +126,28 @@ impl SyncEngine {
         for raw in raws {
             report.fetched += 1;
             let uid = raw.uid;
+            // `store.set_folder_last_uid` は MAX(last_uid, uid) で進むので、この UID の
+            // 保存に失敗しても後続の UID が成功すれば last_uid はそれを追い越す。つまり
+            // この UID は次回以降 fetch_new の範囲から外れ、二度と取得されない。
+            // これは意図した挙動: 失敗 UID で last_uid を止めると、恒久的にパースできない
+            // 1 通がフォルダ全体の同期を永久に止めてしまう（poison message の方が影響が
+            // 大きい）。raw .eml はパース前に保存済みなので本文自体は失われない。
+            // TODO(P4): 失敗した UID を記録して再インデックスできるようにする
             match self.store_raw_message(account_id, folder_id, path, &raw, opts) {
                 Ok(InsertOutcome::Inserted) => report.inserted += 1,
                 Ok(InsertOutcome::Skipped) => report.skipped += 1,
                 Err(_err) => {
-                    tracing::warn!(folder = %path, uid, "failed to parse or store message");
+                    let raw_path = opts
+                        .data_dir
+                        .join(account_id.to_string())
+                        .join(sanitize_folder(path))
+                        .join(format!("{uid}.eml"));
+                    tracing::warn!(
+                        folder = %path,
+                        uid,
+                        raw_path = %raw_path.display(),
+                        "failed to parse or store message"
+                    );
                     report.errors += 1;
                 }
             }
