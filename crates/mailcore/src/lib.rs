@@ -146,11 +146,17 @@ pub struct Draft {
 pub trait MailBackend: Send + Sync {
     /// フォルダ一覧を返す。
     async fn list_folders(&self) -> Result<Vec<(String, FolderRole)>, BackendError>;
-    /// `since_uid` より新しいメッセージを raw (RFC822) で返す。
+
+    /// フォルダの UIDVALIDITY と次の UID を返す。
+    async fn folder_status(&self, folder: &str) -> Result<FolderStatus, BackendError>;
+
+    /// `since_uid` より新しく、かつ `since` 以降に届いたメッセージを raw (RFC822) で返す。
+    /// `since` が `None` なら日付で絞らない。
     async fn fetch_new(
         &self,
         folder: &str,
         since_uid: u32,
+        since: Option<DateTime<Utc>>,
     ) -> Result<Vec<RawMessage>, BackendError>;
 }
 
@@ -159,6 +165,14 @@ pub struct RawMessage {
     pub uid: u32,
     pub flags: Vec<String>,
     pub raw: Vec<u8>,
+}
+
+/// フォルダの現在の状態。UIDVALIDITY が前回と変わっていたら
+/// UID の意味が変わっているので、そのフォルダは取り直す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FolderStatus {
+    pub uidvalidity: u32,
+    pub uid_next: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -307,5 +321,51 @@ mod tests {
     #[test]
     fn prefix_only_subject_returns_empty() {
         assert_eq!(normalize_subject("Re:"), "");
+    }
+
+    /// `MailBackend` がオブジェクト安全で、3 メソッドとも呼べることを確認するフェイク。
+    struct FakeBackend;
+
+    #[async_trait::async_trait]
+    impl MailBackend for FakeBackend {
+        async fn list_folders(&self) -> Result<Vec<(String, FolderRole)>, BackendError> {
+            Ok(vec![("INBOX".into(), FolderRole::Inbox)])
+        }
+
+        async fn folder_status(&self, _folder: &str) -> Result<FolderStatus, BackendError> {
+            Ok(FolderStatus {
+                uidvalidity: 1,
+                uid_next: 2,
+            })
+        }
+
+        async fn fetch_new(
+            &self,
+            _folder: &str,
+            _since_uid: u32,
+            _since: Option<DateTime<Utc>>,
+        ) -> Result<Vec<RawMessage>, BackendError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn mail_backend_is_object_safe_and_callable() {
+        let backend: &dyn MailBackend = &FakeBackend;
+
+        let folders = backend.list_folders().await.unwrap();
+        assert_eq!(folders, vec![("INBOX".to_string(), FolderRole::Inbox)]);
+
+        let status = backend.folder_status("INBOX").await.unwrap();
+        assert_eq!(
+            status,
+            FolderStatus {
+                uidvalidity: 1,
+                uid_next: 2,
+            }
+        );
+
+        let raws = backend.fetch_new("INBOX", 0, None).await.unwrap();
+        assert!(raws.is_empty());
     }
 }

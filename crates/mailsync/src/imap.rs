@@ -7,7 +7,8 @@
 //! - UIDVALIDITY 変化時は folder を丸ごと再同期する（engine 側で判定）。
 //! - パスワード / トークンは `keyring` から取得し、この構造体には持たない。
 
-use mailcore::{BackendError, FolderRole, MailBackend, RawMessage};
+use chrono::{DateTime, Utc};
+use mailcore::{BackendError, FolderRole, FolderStatus, MailBackend, RawMessage};
 
 #[derive(Debug, Clone)]
 pub struct ImapConfig {
@@ -35,10 +36,18 @@ impl MailBackend for ImapBackend {
         ))
     }
 
+    // TODO(P0): UID SEARCH で UIDVALIDITY / UIDNEXT を取得する。
+    async fn folder_status(&self, _folder: &str) -> Result<FolderStatus, BackendError> {
+        Err(BackendError::Protocol(
+            "ImapBackend::folder_status is not implemented yet (P0)".into(),
+        ))
+    }
+
     async fn fetch_new(
         &self,
         _folder: &str,
         _since_uid: u32,
+        _since: Option<DateTime<Utc>>,
     ) -> Result<Vec<RawMessage>, BackendError> {
         Err(BackendError::Protocol(
             "ImapBackend::fetch_new is not implemented yet (P0)".into(),

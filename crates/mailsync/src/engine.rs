@@ -37,7 +37,9 @@ impl SyncEngine {
                 .store
                 .ensure_folder(account_id, &path, role_str(role))?;
             let last_uid = self.store.folder_last_uid(folder_id)?;
-            let raws = backend.fetch_new(&path, last_uid).await?;
+            // TODO(P0): folder_status で UIDVALIDITY を比較して last_uid をリセットし、
+            // 90 日の窓を since に渡す。今はコンパイルを通すだけ。
+            let raws = backend.fetch_new(&path, last_uid, None).await?;
             for raw in raws {
                 // TODO(P0): parse + insert。今はカウントだけ。
                 let _ = raw;
