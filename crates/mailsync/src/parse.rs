@@ -181,7 +181,9 @@ fn html_to_plain_text(html: &str) -> String {
             }
             continue;
         }
-        let ch = html[i..].chars().next().expect("valid utf8 boundary");
+        let Some(ch) = html[i..].chars().next() else {
+            break;
+        };
         result.push(ch);
         i += ch.len_utf8();
     }
