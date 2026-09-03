@@ -17,5 +17,6 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
+mail-parser.workspace = true
 # P0 で追加予定（CLAUDE.md 参照）:
-# async-imap, async-native-tls or tokio-rustls, mail-parser, keyring
+# async-imap, async-native-tls or tokio-rustls, keyring

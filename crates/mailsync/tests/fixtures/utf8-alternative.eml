@@ -1,0 +1,21 @@
+From: sato@client-a.example
+To: tanaka@my-company.example
+Subject: =?UTF-8?B?5a6a5L6L5Lya44Gu44GU5qGI5YaF?=
+Date: Wed, 03 Sep 2025 10:00:00 +0900
+Message-ID: <utf8alt-001@client-a.example>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary-alt-001"
+
+--boundary-alt-001
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+OeaciOOBruWumuS+i+S8muOCkuOBlOahiOWGheOBl+OBvuOBmeOAggrml6XmmYLjga/liKXpgJTjgZTpgKPntaHjgZfjgb7jgZnjgII=
+
+--boundary-alt-001
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+PGh0bWw+PGJvZHk+PHA+OeaciOOBruWumuS+i+S8muOCkuOBlOahiOWGheOBl+OBvuOBmeOAgjwvcD48cD7ml6XmmYLjga/liKXpgJTjgZTpgKPntaHjgZfjgb7jgZnjgII8L3A+PC9ib2R5PjwvaHRtbD4=
+
+--boundary-alt-001--
