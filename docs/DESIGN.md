@@ -118,6 +118,7 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 4. UI では confidence 低いタスクは「候補」として薄く表示、ユーザーが確定
 - Cowork / Claude Code から MCP 経由で同じことをやる場合は 6 のツールだけで完結する（API キー不要）
 - どちらも動くようにしておき、**「アプリが勝手に要約する」はオプトイン**にする（コストと誤要約の管理のため）
+- 実装順は MCP 経由（Claude 側が実行）を先に入れ、アプリ内で Claude API を叩く方式は後日オプトインで追加する
 
 ## 9. 認証まわり
 - 汎用 IMAP: パスワードは `keyring` に保存。設定 UI で手入力 + 自動検出（Mozilla autoconfig DB を参考）
@@ -130,7 +131,7 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 | P0-a | workspace 雛形、mailstore スキーマ、`meowbox init / accounts / search` | ✅ 2026-09-02 |
 | P0-b | mailsync で IMAP 同期 → SQLite。手元の IMAP アカウントで動作確認 | 次 |
 | P1 | mailmcp: `list_accounts` `search_messages` `get_thread` `inbox_digest`。Cowork から叩けることを確認 | ここで Thunderbird MCP を卒業 |
-| P2 | Tauri UI: アカウント一覧・スレッド表示・検索・タスク一覧 | 使い始められる |
+| P2 | Tauri UI: アカウント一覧・スレッド表示・検索・タスク一覧 | ✅ 2026-09-03 |
 | P3 | 要約・タスク抽出（MCP経由とアプリ内API呼び出しの両方）、`create_draft`、UI で承認送信 | MVP 完成 |
 | P4 | Gmail / M365 OAuth、Graph バックエンド、IMAP IDLE、過去分バックフィル | 案件アドレス増加に耐える |
 | P5 | 案件タグ横断ダッシュボード、日次ダイジェスト、Thunderbird からのインポート | 便利機能 |

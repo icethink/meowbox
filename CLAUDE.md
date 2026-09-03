@@ -51,18 +51,20 @@ cargo run -p mailcli -- accounts list
 10. UI から DB / IPC を直接叩かない。データ取得は `apps/desktop/src/api/` の関数だけを通す。
 
 ## 現在のフェーズと次の一手
+実装順は P0-b → P3 → P1。P1 の MCP は実データが入ってから着手する。
 - [x] P0-a: workspace 雛形、スキーマ、`meowbox init / accounts / search`
-- [ ] P0-b: `mailsync::imap` を async-imap で実装、`parse` を mail-parser で実装、`meowbox sync` を動かす
-      （最初のターゲット: 汎用 IMAP 1 アカウント、INBOX の直近 90 日）
-- [ ] P1: `mailmcp` を rmcp で実装（list_accounts / search_messages / get_thread / inbox_digest）
-      → Claude Desktop / Cowork から叩けることを確認したら Thunderbird MCP を卒業
 - [x] P2: Tauri UI（AppShell / Sidebar / ThreadList / ThreadView / DigestPanel、
       キーボード操作、モックデータ）— 2026-09-03
+- [ ] P0-b: `mailsync::imap` を async-imap で実装、`parse` を mail-parser で実装、`meowbox sync` を動かす
+      （最初のターゲット: 汎用 IMAP 1 アカウント、INBOX の直近 90 日）
+      normalize_subject に RE: / Re[2]: / FW: / 返信：（全角）などを含むテストを追加する
 - [ ] P3: `apps/desktop/src/api/` のモックを Tauri invoke → mailstore に差し替える。
       `listAccounts / listProjects / listThreads / getThread / getDigest / createDraft` を
       `#[tauri::command]` として `src-tauri` に実装し、UI 側は `src/api/` の中身だけを
       `invoke()` に置き換える（コンポーネントには触らない）。
       あわせて要約・タスク抽出・下書き生成・承認送信を実データに繋ぐ
+- [ ] P1: `mailmcp` を rmcp で実装（list_accounts / search_messages / get_thread / inbox_digest）
+      → Claude Desktop / Cowork から叩けることを確認したら Thunderbird MCP を卒業
 - [ ] P4: Gmail / M365 OAuth、IDLE、バックフィル
 
 ## 追加予定の主要クレート
