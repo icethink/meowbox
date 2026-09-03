@@ -66,6 +66,25 @@ Tauri v2 + React 18 + TypeScript + Tailwind v4 で実装した。データはま
 | 本文・要約の行折り返し | 1 文字分ずれる行がある | デザインは Google Fonts 版、実装は `@fontsource` 版の Noto Sans JP。字幅がわずかに違う |
 | ライトテーマ | 未実装 | 未デザイン。`[data-theme="light"]` に値を入れれば切り替わる構造だけ用意 |
 
+## フォローアップ（P2 のあとに入れた 5 コミット）
+
+- `chore: add implementer and reviewer subagents` —
+  `.claude/agents/` にサブエージェント定義を 2 つ追加し、CLAUDE.md に「作業の割り振り」を書いた。
+  以降は計画とレビューをメインが持ち、実装は sonnet 固定の implementer に委譲する。
+- `docs: reorder the roadmap to P0-b, P3, P1` —
+  実装順を P0-b（IMAP 同期）→ P3（UI を invoke で実データに接続）→ P1（MCP）に変更。
+  要約・タスク抽出は MCP 経由を先に入れ、アプリ内で Claude API を叩く方式は後日オプトインで追加する。
+- `chore: drop the design reference HTML` —
+  `docs/design/main-dark.reference.html` は寸法参照としての役目を終えたので削除した（履歴には残る）。
+- `docs(desktop): note the mock date baseline` —
+  モックの日付が 2025-09-02 前後で固定されていることを `src/mock/README.md` に残した。
+- `docs(desktop): mark CONFIDENT_AT as provisional` —
+  確度しきい値 0.8 は暫定。P3 で実際の抽出精度が分かってから `mailcore` に移す。
+
+> サンプルデータから業種が推測できる語を取り除く変更は、追加コミットではなく履歴の書き換えで行った。
+> モックを最初に入れたコミットの時点から置換後の文言になっており、実装スクリーンショットも
+> 差し替え済み。ブランチはこの PR が初 push のため、公開されるのは書き換え後の履歴だけ。
+
 ## Checklist
 
 - [x] `cargo fmt --all -- --check`
