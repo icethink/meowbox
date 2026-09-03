@@ -1,0 +1,58 @@
+/* Meowbox design tokens — extracted from Claude Design "メイン画面 (ダーク)" (2026-09-02)
+   ライトテーマは未デザイン。ダークの値を正として、ライトは後で追加する。 */
+:root {
+  /* --- surfaces --- */
+  --bg-app: #0e0f11;          /* ウィンドウ背景 */
+  --bg-base: #17181c;         /* メイン面 */
+  --bg-sidebar: #131417;
+  --bg-elevated: #1a1b20;     /* カード・入力欄 */
+  --bg-hover: rgba(255,255,255,.04);
+  --bg-selected: rgba(255,255,255,.05);
+  --bg-subtle: rgba(255,255,255,.03);
+  --border: rgba(255,255,255,.06);
+  --border-strong: rgba(255,255,255,.1);
+  --border-input: #2a2c33;
+
+  /* --- text --- */
+  --text-primary: #e8e6e1;
+  --text-secondary: #c9c6bf;
+  --text-muted: #9b9891;
+  --text-faint: #6b6862;
+  --text-disabled: #5a5750;
+  --text-placeholder: #87847d;
+
+  /* --- accent (人間側: 送信・選択・要対応) --- */
+  --accent: #e8a04c;
+  --accent-hover: #f2b76b;
+  --accent-bg: rgba(232,160,76,.15);
+  --accent-bg-subtle: rgba(232,160,76,.06);
+  --accent-ring: rgba(232,160,76,.4);
+
+  /* --- AI (Claude 由来: 要約・抽出タスク・下書き) --- */
+  --ai: #a79bea;
+  --ai-muted: #8b83b8;
+  --ai-text: #e2dff2;
+  --ai-text-muted: #c9c6d6;
+  --ai-bg: rgba(167,155,234,.07);
+  --ai-bg-strong: rgba(167,155,234,.14);
+  --ai-border: rgba(167,155,234,.22);
+  --ai-border-strong: rgba(167,155,234,.35);
+
+  /* --- semantic --- */
+  --ok: #6fbf8f;   --ok-bg: rgba(111,191,143,.14);
+  --warn: #d9b45a;
+  --danger: #d96a5e; --danger-bg: rgba(217,106,94,.08); --danger-border: rgba(217,106,94,.25);
+
+  /* --- typography --- */
+  --font-sans: 'Noto Sans JP', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;   /* メールアドレス・数値・時刻・ショートカット */
+  --fs-2xs: 10px;  --fs-xs: 10.5px;  --fs-sm: 11.5px;  --fs-base: 12.5px;
+  --fs-md: 13px;   --fs-lg: 14px;    --fs-xl: 15px;
+  --lh: 1.6;  --tracking: .01em;  --tracking-label: .08em;
+
+  /* --- shape --- */
+  --radius-xs: 4px;  --radius-sm: 5px;  --radius: 6px;  --radius-md: 8px;  --radius-pill: 20px;
+
+  /* --- layout --- */
+  --w-sidebar: 220px;  --w-list: 390px;  --w-panel: 300px;
+}

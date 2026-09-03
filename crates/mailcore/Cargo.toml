@@ -1,0 +1,14 @@
+[package]
+name = "mailcore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Meowbox domain model and backend traits (no I/O, no UI)"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true

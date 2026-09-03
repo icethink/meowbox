@@ -1,0 +1,23 @@
+[package]
+name = "mailcli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Meowbox debug CLI: works without the UI or MCP"
+
+[[bin]]
+name = "meowbox"
+path = "src/main.rs"
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+mailstore = { path = "../mailstore" }
+mailsync = { path = "../mailsync" }
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

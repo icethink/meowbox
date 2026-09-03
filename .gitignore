@@ -1,0 +1,8 @@
+/target
+/data
+*.db
+*.db-journal
+.env
+node_modules
+apps/desktop/src-tauri/target
+apps/desktop/dist

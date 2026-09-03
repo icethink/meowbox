@@ -1,0 +1,18 @@
+[package]
+name = "mailmcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Meowbox MCP server: exposes mail search/threads/digest/tasks/drafts to Claude"
+
+[dependencies]
+mailcore = { path = "../mailcore" }
+mailstore = { path = "../mailstore" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# P1 で追加予定: rmcp（公式 Rust MCP SDK）。stdio と Streamable HTTP の両対応にする。
