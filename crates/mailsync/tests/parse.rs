@@ -7,6 +7,7 @@ const SHIFTJIS_PLAIN: &[u8] = include_bytes!("fixtures/shiftjis-plain.eml");
 const UTF8_ALTERNATIVE: &[u8] = include_bytes!("fixtures/utf8-alternative.eml");
 const ATTACHMENT_MIXED: &[u8] = include_bytes!("fixtures/attachment-mixed.eml");
 const REPLY_MULTIPREFIX: &[u8] = include_bytes!("fixtures/reply-multiprefix.eml");
+const HTML_ONLY: &[u8] = include_bytes!("fixtures/html-only.eml");
 
 #[test]
 fn parses_iso2022jp_plain() {
@@ -56,6 +57,22 @@ fn parses_reply_multiprefix_strips_quote_and_signature() {
 fn normalizes_reply_multiprefix_subject() {
     let p = parse(REPLY_MULTIPREFIX).expect("parse should succeed");
     assert_eq!(mailcore::normalize_subject(&p.subject), "定例会の件");
+}
+
+#[test]
+fn parses_html_only_strips_tags_and_decodes_entities() {
+    let p = parse(HTML_ONLY).expect("parse should succeed");
+
+    let html = p.body_html.expect("body_html should be present");
+    assert!(html.contains("<p>"));
+
+    assert!(p.body_text.contains("受付時間は 9:00 & 18:00 です。"));
+    assert!(p.body_text.contains("詳細は <担当> までご連絡ください。"));
+    assert!(!p.body_text.contains("color: red"));
+    assert!(!p.body_text.contains("var x = 1"));
+    assert!(!p.body_text.contains("<p>"));
+    assert!(!p.body_text.contains("</body>"));
+    assert!(!p.body_text.contains("\n\n\n"));
 }
 
 #[test]
