@@ -133,6 +133,22 @@ pub fn load_password(account_id: i64) -> Result<String, BackendError> {
     })
 }
 
+/// keyring にパスワードを保存する。DB にも設定ファイルにも書かない。
+///
+/// keyring は OS の資格情報ストアを触るため、この関数のテストは無い（CI では走らせられない）。
+pub fn save_password(account_id: i64, password: &str) -> Result<(), BackendError> {
+    let entry = keyring::Entry::new("meowbox", &format!("account:{account_id}")).map_err(|e| {
+        BackendError::Auth(format!(
+            "keyring entry unavailable for account {account_id}: {e}"
+        ))
+    })?;
+    entry.set_password(password).map_err(|e| {
+        BackendError::Auth(format!(
+            "failed to save password for account {account_id} to keyring: {e}"
+        ))
+    })
+}
+
 /// `webpki-roots` のルート証明書を使う TLS コネクタ。
 fn tls_connector() -> TlsConnector {
     let root_store = RootCertStore {
