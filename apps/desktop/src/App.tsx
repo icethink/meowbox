@@ -4,12 +4,14 @@ import { Sidebar } from './components/sidebar/Sidebar';
 import { ThreadList } from './components/list/ThreadList';
 import { ThreadRow } from './components/list/ThreadRow';
 import { ThreadView } from './components/thread/ThreadView';
+import { DigestPanel } from './components/panel/DigestPanel';
 import { mockThreadDetails, mockThreads } from './mock/threads';
 import { mockViews } from './mock/accounts';
 import { useAppStore } from './store/app';
 
 export default function App() {
   const { selectedThreadKey, selectThread, archivedKeys, archiveThread, readKeys } = useAppStore();
+  const rightPanelOpen = useAppStore((s) => s.rightPanelOpen);
   const activeProjectTag = useAppStore((s) => s.activeProjectTag);
   const activeView = useAppStore((s) => s.activeView);
 
@@ -57,8 +59,7 @@ export default function App() {
           onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
         />
       }
-      // TODO(P2): (5) でダイジェストを入れる
-      panel={null}
+      panel={rightPanelOpen ? <DigestPanel /> : null}
     />
   );
 }
