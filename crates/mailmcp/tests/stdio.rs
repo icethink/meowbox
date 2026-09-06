@@ -299,7 +299,7 @@ fn exercises_every_tool_over_stdio() {
             .add_account(
                 "メール A",
                 AccountKind::Imap,
-                "tanaka@mail-a.example",
+                "account-a@mail-a.example",
                 Some("project-a"),
                 &json!({}),
             )
@@ -309,7 +309,7 @@ fn exercises_every_tool_over_stdio() {
             .add_account(
                 "メール B",
                 AccountKind::Imap,
-                "suzuki@mail-b.example",
+                "account-b@mail-b.example",
                 None,
                 &json!({}),
             )
