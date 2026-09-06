@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use mailstore::Store;
 use mailsync::engine::{SyncEngine, SyncOptions, SyncProgress};
 use mailsync::imap::{ImapBackend, ImapConfig};
@@ -197,6 +197,12 @@ async fn run_sync(
     match engine.sync_once(account_id, &backend, &opts).await {
         Ok(report) => {
             record_success(&last_sync, account_id, report.inserted, report.errors);
+            // meta テーブルへの永続化。別プロセス（MCP サーバ）が `last_synced_at` を
+            // 読めるようにするためで、失敗しても取り込んだメールを無駄にしないよう
+            // warn に残すだけで続行する。
+            if let Err(e) = record_synced_at(&engine.store, account_id, Utc::now()) {
+                tracing::warn!("最終同期時刻の記録に失敗しました: {e}");
+            }
             // engine が done: true のイベントを出しているので、ここでは追加のイベントを出さない。
         }
         Err(e) => {
@@ -225,6 +231,18 @@ fn emit_done_error(app: &tauri::AppHandle, account_id: i64, message: &str) {
             error: Some(message.to_string()),
         },
     );
+}
+
+/// `meta` テーブルに最終同期時刻を書くためのキー。
+/// **この形式は MCP サーバ側（別プロセス）でも同じものを読むので、変えないこと。**
+fn synced_at_key(account_id: i64) -> String {
+    format!("sync:{account_id}:finished_at")
+}
+
+/// 同期成功時刻を `meta` テーブルに書く。ネットワーク・keyring を伴わない部分だけを
+/// 切り出してあるので、テストではこの関数を直接呼ぶ。
+fn record_synced_at(store: &Store, account_id: i64, at: DateTime<Utc>) -> anyhow::Result<()> {
+    store.set_meta(&synced_at_key(account_id), &at.to_rfc3339())
 }
 
 fn record_success(
@@ -299,6 +317,20 @@ mod tests {
         let guard = begin_sync(&syncing, 1).unwrap();
         drop(guard);
         let _guard2 = begin_sync(&syncing, 1).unwrap();
+    }
+
+    #[test]
+    fn synced_at_key_has_the_shape_the_mcp_server_reads() {
+        assert_eq!(synced_at_key(42), "sync:42:finished_at");
+    }
+
+    #[test]
+    fn record_synced_at_can_be_read_back_via_get_meta() {
+        let store = Store::open_in_memory().unwrap();
+        let at = Utc::now();
+        record_synced_at(&store, 42, at).unwrap();
+        let value = store.get_meta(&synced_at_key(42)).unwrap();
+        assert_eq!(value, Some(at.to_rfc3339()));
     }
 
     #[test]
