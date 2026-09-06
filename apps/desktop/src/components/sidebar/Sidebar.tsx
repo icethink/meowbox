@@ -1,6 +1,9 @@
 import { Search } from 'lucide-react';
-import { mockProjects, mockSyncStatus, mockViews } from '../../mock/accounts';
+import { useEffect, useState } from 'react';
+import { getSyncStatus, listAccounts, listProjects, listViews, onSyncProgress } from '../../api';
 import { useAppStore } from '../../store/app';
+import type { ProjectGroupView, SyncState, ViewItemView } from '../../types.ui';
+import { SettingsModal } from '../settings/SettingsModal';
 import { Kbd } from '../ui/Kbd';
 import { Logo } from './Logo';
 import { ProjectGroup } from './ProjectGroup';
@@ -19,6 +22,53 @@ export function Sidebar() {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const openPalette = useAppStore((s) => s.setCommandPaletteOpen);
+
+  const [projects, setProjects] = useState<ProjectGroupView[]>([]);
+  const [views, setViews] = useState<ViewItemView[]>([]);
+  const [sync, setSync] = useState<{ state: SyncState; label: string }>({
+    state: 'ok',
+    label: '',
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  /** 案件・ビュー・同期状態だけを読み直す（未読件数が変わったとき） */
+  async function reloadSidebar() {
+    const [p, v, s] = await Promise.all([listProjects(), listViews(), getSyncStatus()]);
+    setProjects(p);
+    setViews(v);
+    setSync(s);
+  }
+
+  useEffect(() => {
+    void reloadSidebar();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      unlisten = await onSyncProgress((e) => {
+        if (!e.done) {
+          setSync({
+            state: 'syncing',
+            label: e.total > 0 ? `同期中 ${e.fetched} / ${e.total}` : '同期中',
+          });
+          return;
+        }
+        if (e.error) {
+          setSync({ state: 'error', label: `エラー: ${e.error}` });
+          return;
+        }
+        void reloadSidebar();
+      });
+    })();
+    return () => unlisten?.();
+  }, []);
+
+  /** 設定モーダルでの変更後。アカウント一覧も併せて読み直しておく */
+  function handleSettingsChanged() {
+    void reloadSidebar();
+    void listAccounts();
+  }
 
   return (
     <nav
@@ -45,7 +95,7 @@ export function Sidebar() {
         <section>
           <SectionLabel>案件</SectionLabel>
           <div className="flex flex-col gap-px">
-            {mockProjects.map((p) => (
+            {projects.map((p) => (
               <ProjectGroup
                 key={p.tag}
                 project={p}
@@ -59,7 +109,7 @@ export function Sidebar() {
         <section>
           <SectionLabel>ビュー</SectionLabel>
           <div className="flex flex-col gap-px">
-            {mockViews.map((v) => (
+            {views.map((v) => (
               <ViewItem
                 key={v.key}
                 view={v}
@@ -71,7 +121,17 @@ export function Sidebar() {
         </section>
       </div>
 
-      <SyncStatus state={mockSyncStatus.state} label={mockSyncStatus.label} />
+      <SyncStatus
+        state={sync.state}
+        label={sync.label}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={handleSettingsChanged}
+      />
     </nav>
   );
 }
