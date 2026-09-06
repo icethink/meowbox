@@ -15,6 +15,10 @@ interface AppState {
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
 
+  /** アカウント追加ウィザード */
+  accountWizardOpen: boolean;
+  setAccountWizardOpen: (open: boolean) => void;
+
   // --- 選択 ---
   selectedThreadKey: string | null;
   selectThread: (key: string) => void;
@@ -56,6 +60,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   commandPaletteOpen: false,
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+
+  accountWizardOpen: false,
+  setAccountWizardOpen: (open) => set({ accountWizardOpen: open }),
 
   // デザインでは「Re: 見積の件」が選択されている
   selectedThreadKey: 'th-estimate',

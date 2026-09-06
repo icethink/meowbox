@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { ThreadList } from './components/list/ThreadList';
@@ -6,10 +6,14 @@ import { ThreadRow } from './components/list/ThreadRow';
 import { ThreadView } from './components/thread/ThreadView';
 import { DigestPanel } from './components/panel/DigestPanel';
 import { CommandPalette } from './components/CommandPalette';
+import { AccountWizard } from './components/onboarding/AccountWizard';
+import { EmptyState } from './components/onboarding/EmptyState';
 import { Toast } from './components/ui/Toast';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { mockThreadDetails, mockThreads } from './mock/threads';
 import { mockViews } from './mock/accounts';
+import { listAccounts, syncAccount } from './api';
+import type { Account } from './types';
 import { useAppStore } from './store/app';
 
 export default function App() {
@@ -22,7 +26,25 @@ export default function App() {
     readKeys,
     activeProjectTag,
     activeView,
+    accountWizardOpen,
+    setAccountWizardOpen,
   } = useAppStore();
+
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
+
+  async function refreshAccounts() {
+    const list = await listAccounts();
+    setAccounts(list);
+  }
+
+  useEffect(() => {
+    void refreshAccounts();
+  }, []);
+
+  function handleAdded(accountId: number) {
+    void syncAccount(accountId);
+    void refreshAccounts();
+  }
 
   const threads = useMemo(
     () =>
@@ -52,30 +74,42 @@ export default function App() {
     if (after) selectThread(after);
   }
 
+  // 読み込み中は何も出さない（起動直後のちらつき防止）
+  if (accounts === null) return null;
+
   return (
     <>
-      <AppShell
-        sidebar={<Sidebar />}
-        list={
-          <ThreadList title={listTitle} count={listCount}>
-            {threads.map((t) => (
-              <ThreadRow
-                key={t.thread_key}
-                thread={t}
-                selected={t.thread_key === selectedThreadKey}
-                onSelect={() => selectThread(t.thread_key)}
-                onArchive={() => handleArchive(t.thread_key)}
-              />
-            ))}
-          </ThreadList>
-        }
-        thread={
-          <ThreadView
-            thread={selected}
-            onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
-          />
-        }
-        panel={rightPanelOpen ? <DigestPanel /> : null}
+      {accounts.length === 0 ? (
+        <EmptyState onAddAccount={() => setAccountWizardOpen(true)} />
+      ) : (
+        <AppShell
+          sidebar={<Sidebar />}
+          list={
+            <ThreadList title={listTitle} count={listCount}>
+              {threads.map((t) => (
+                <ThreadRow
+                  key={t.thread_key}
+                  thread={t}
+                  selected={t.thread_key === selectedThreadKey}
+                  onSelect={() => selectThread(t.thread_key)}
+                  onArchive={() => handleArchive(t.thread_key)}
+                />
+              ))}
+            </ThreadList>
+          }
+          thread={
+            <ThreadView
+              thread={selected}
+              onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
+            />
+          }
+          panel={rightPanelOpen ? <DigestPanel /> : null}
+        />
+      )}
+      <AccountWizard
+        open={accountWizardOpen}
+        onClose={() => setAccountWizardOpen(false)}
+        onAdded={handleAdded}
       />
       <CommandPalette />
       <Toast />
