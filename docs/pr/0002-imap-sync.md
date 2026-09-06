@@ -48,7 +48,9 @@ INBOX（直近 90 日）が SQLite に入り、`meowbox search` で日本語の�
 - [x] `cargo fmt --all -- --check`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo test --workspace`
-- [ ] 実アカウントでの同期・検索・再同期の確認
+- [x] 実アカウントでの同期・検索・再同期の確認（P3-a（PR #3）の GUI から実施した
+      （2026-09-06）。データ置き場がアプリデータディレクトリ配下に移ったため、
+      CLI ではなく GUI で確認した）
 
 ## Notes
 

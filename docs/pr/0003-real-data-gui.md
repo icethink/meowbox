@@ -83,7 +83,7 @@ cargo test --workspace 2>&1 | Select-String "test result"
 ```
 cd apps/desktop; pnpm test
 ```
-→ **95 passed**（17 ファイル、0 failed）
+→ **102 passed**（17 ファイル、0 failed）
 
 ## レビューで直したもの
 
@@ -98,6 +98,17 @@ cd apps/desktop; pnpm test
 - **ドキュメントのパス表記** — データディレクトリ移動後、raw `.eml` のパスの記述が
   古いままだった箇所を修正した（`docs: correct the raw eml path after the data
   directory move`）
+- **送信していないのに「送信しました」と出ていた** — `api/tauri.ts` の `sendDraft` が
+  何もしない実装のまま、`ReplyBox` が無条件に成功トーストを出していた。本番ビルドで
+  「確認して送信」を押すと、1 通も送信していないのに成功表示が出る状態だった。
+  送信は MVP の安全境界の外（下書きの保存まで）なので、送信ボタンを無効化して
+  「送信は未対応です（下書きの保存まで）」と明示し、代わりに「下書きを保存」を追加した
+  （`fix(desktop): stop reporting success for mail that was never sent`）
+- **実データ経路がモックの作文を返していた** — `api/tauri.ts` の `generateAiDraft` が
+  `VITE_MEOWBOX_MOCK` の判定を通らずに `src/mock/drafts.ts` の文面をそのまま返しており、
+  本番ビルドで「AI で下書き」を押すとサンプル文面が本文に入る状態だった。
+  実データ実装から `src/mock/` への import を切り、使えないことを UI に出すようにした
+  （`fix(desktop): stop returning mock prose from the real api path`）
 
 ## 積み残し（P3-b 以降）
 
@@ -117,12 +128,17 @@ cd apps/desktop; pnpm test
 - [x] `cargo test --workspace`（145 passed / 1 ignored）
 - [x] `pnpm lint`
 - [x] `pnpm typecheck`
-- [x] `pnpm test`（95 passed / 17 ファイル）
+- [x] `pnpm test`（102 passed / 17 ファイル）
 - [x] `pnpm build`
 - [x] `pnpm tauri dev` で起動し、アカウント登録 → 同期 → 一覧・スレッド表示を確認
+- [x] `pnpm tauri build`（NSIS インストーラの生成。`target/release/bundle/nsis/
+      Meowbox_0.1.0_x64-setup.exe` と `bundle/msi/Meowbox_0.1.0_x64_en-US.msi` を生成済み）
+- [x] クリーンな `MEOWBOX_DATA_DIR` で起動して空状態が出ることを確認
 - [x] ADR 0006
 - [x] `CLAUDE.md` の P3-a にチェック、P3-b を切り出し
-- [ ] 実アカウントでの一連の流れの確認（インストーラは未配布のため手元ビルドで）
+- [x] 実アカウントでの一連の流れの確認（飼育員さんの端末で `pnpm tauri dev` から
+      「空状態 → ウィザード → 実アカウント登録 → 同期 → 一覧・スレッド表示」を確認済み
+      （2026-09-06）。件数・所要時間などの具体的な数値は後日追記）
 
 ## Notes
 
