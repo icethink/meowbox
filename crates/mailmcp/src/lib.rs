@@ -1,15 +1,16 @@
-//! mailmcp — Claude から見える面。
+//! mailmcp — Claude から見える面。`meowbox-mcp` バイナリ本体は `main.rs`。
 //!
 //! 設計原則:
 //! - **1 通ずつ取らせない。** スレッド単位・ダイジェスト単位で返す。
 //! - 返り値は軽量（id / 件名 / 差出人 / 日付 / snippet）。本文が要るときだけ `get_thread`。
-//! - **送信ツールは出さない。** `create_draft` までで、送信は UI の承認ボタンのみ。
+//! - **`mark`（既読・アーカイブ）と送信は MCP に出さない**（ADR 0002 / 0007）。
 //!
 //! ツール一覧（DESIGN.md §6 と同期を取ること）:
 //!   list_accounts, search_messages, get_thread, get_message, get_attachment,
-//!   inbox_digest, save_summary, upsert_tasks, list_tasks, create_draft, mark
+//!   inbox_digest, save_summary, upsert_tasks, list_tasks, create_draft
 //!
-//! TODO(P1): rmcp で実装。ここではツール入出力の型だけ先に固定しておく。
+//! 現状: `list_accounts` / `list_projects` を実装済み（`main.rs`）。
+//! TODO(P1): 残りのツールを rmcp で実装する。ここではその入出力の型だけ先に固定しておく。
 
 use serde::{Deserialize, Serialize};
 
@@ -78,11 +79,4 @@ pub struct CreateDraftArgs {
     pub to: Option<Vec<String>>,
     pub subject: Option<String>,
     pub body: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MarkArgs {
-    pub ids: Vec<i64>,
-    /// "read" | "unread" | "archive" | "flag" | "unflag"
-    pub action: String,
 }

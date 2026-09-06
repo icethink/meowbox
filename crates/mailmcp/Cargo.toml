@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 description = "Meowbox MCP server: exposes mail search/threads/digest/tasks/drafts to Claude"
 
+[[bin]]
+name = "meowbox-mcp"
+path = "src/main.rs"
+
 [dependencies]
 mailcore = { path = "../mailcore" }
 mailstore = { path = "../mailstore" }
@@ -15,4 +19,5 @@ serde_json.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-# P1 で追加予定: rmcp（公式 Rust MCP SDK）。stdio と Streamable HTTP の両対応にする。
+tracing-subscriber.workspace = true
+rmcp.workspace = true

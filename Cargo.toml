@@ -38,3 +38,4 @@ futures = "0.3.34"
 keyring = "4.2.0"
 rpassword = "7.5.4"
 dirs = "6"
+rmcp = { version = "3.2.0", features = ["server", "transport-io"] }
