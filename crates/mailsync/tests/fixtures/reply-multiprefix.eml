@@ -1,0 +1,20 @@
+From: tanaka@my-company.example
+To: sato@client-a.example
+Subject: =?UTF-8?B?UmU6IFJlWzJdOiBGVzog6L+U5L+h77yaIOWumuS+i+S8muOBruS7tg==?=
+Date: Thu, 04 Sep 2025 09:00:00 +0900
+Message-ID: <reply-001@my-company.example>
+In-Reply-To: <utf8alt-001@client-a.example>
+References: <root-001@client-a.example> <utf8alt-001@client-a.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+承知しました。
+明日までに確認します。
+
+On Mon, 01 Sep 2025 17:20:00 +0900, sato@client-a.example wrote:
+> お世話になっております。
+> 見積書をお送りいたします。
+
+--
+田中 太郎

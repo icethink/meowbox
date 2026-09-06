@@ -1,0 +1,22 @@
+From: sato@client-a.example
+To: tanaka@my-company.example
+Subject: =?UTF-8?B?6LOH5paZ44Gu6YCB5LuY?=
+Date: Thu, 04 Sep 2025 11:00:00 +0900
+Message-ID: <attach-001@client-a.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary-mix-001"
+
+--boundary-mix-001
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: base64
+
+6LOH5paZ44KS5re75LuY44GX44G+44GZ44CC
+
+--boundary-mix-001
+Content-Type: text/plain; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+Content-Transfer-Encoding: base64
+
+bWVldGluZyBub3Rlcwo=
+
+--boundary-mix-001--

@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use mailcore::{Account, AccountKind, Address, MessageSummary};
+use mailcore::{Account, AccountKind, Address, Message, MessageSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const SCHEMA_VERSION: i64 = 1;
@@ -162,6 +162,34 @@ impl Store {
         Ok(())
     }
 
+    pub fn folder_uidvalidity(&self, folder_id: i64) -> Result<Option<u32>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT uidvalidity FROM folders WHERE id = ?1",
+                params![folder_id],
+                |r| r.get::<_, Option<i64>>(0),
+            )?
+            .map(|v| v as u32))
+    }
+
+    pub fn set_folder_uidvalidity(&self, folder_id: i64, uidvalidity: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE folders SET uidvalidity = ?2 WHERE id = ?1",
+            params![folder_id, uidvalidity as i64],
+        )?;
+        Ok(())
+    }
+
+    /// UIDVALIDITY が変わったとき用。last_uid を 0 に戻す。
+    pub fn reset_folder_uid(&self, folder_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE folders SET last_uid = 0 WHERE id = ?1",
+            params![folder_id],
+        )?;
+        Ok(())
+    }
+
     // ---- messages -------------------------------------------------------
 
     /// パース済みメッセージを 1 件保存。同じ (folder, uid) は無視する。
@@ -200,6 +228,23 @@ impl Store {
         let id = self.conn.last_insert_rowid();
         self.set_folder_last_uid(m.folder_id, m.uid)?;
         Ok(Some(id))
+    }
+
+    /// 添付ファイルのメタデータだけを保存する。本体は raw .eml に残す方針のため
+    /// `path` は常に NULL。
+    pub fn insert_attachment_meta(
+        &self,
+        message_id: i64,
+        filename: &str,
+        mime: &str,
+        size: usize,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO attachments(message_id, filename, mime, size, path)
+             VALUES (?1, ?2, ?3, ?4, NULL)",
+            params![message_id, filename, mime, size as i64],
+        )?;
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// FTS5 全文検索。`query` が空なら新着順。
@@ -258,6 +303,50 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// 1 通を本文つきで取得する。`folder_path` は folders を join して埋める。
+    /// 見つからなければ `Ok(None)`。
+    pub fn get_message(&self, id: i64) -> Result<Option<Message>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT m.id, m.account_id, f.path, m.uid, m.message_id, m.thread_key,
+                        m.from_addr, m.from_name, m.to_json, m.cc_json, m.subject, m.date,
+                        m.snippet, m.body_text, m.has_attachments, m.is_read, m.is_flagged
+                 FROM messages m
+                 JOIN folders f ON f.id = m.folder_id
+                 WHERE m.id = ?1",
+                params![id],
+                |r| {
+                    let to_json: String = r.get(8)?;
+                    let cc_json: String = r.get(9)?;
+                    let date: String = r.get(11)?;
+                    Ok(Message {
+                        id: r.get(0)?,
+                        account_id: r.get(1)?,
+                        folder_path: r.get(2)?,
+                        uid: r.get::<_, i64>(3)? as u32,
+                        message_id: r.get(4)?,
+                        thread_key: r.get(5)?,
+                        from: Address {
+                            email: r.get(6)?,
+                            name: r.get(7)?,
+                        },
+                        to: serde_json::from_str(&to_json).unwrap_or_default(),
+                        cc: serde_json::from_str(&cc_json).unwrap_or_default(),
+                        subject: r.get(10)?,
+                        date: parse_ts(&date),
+                        snippet: r.get(12)?,
+                        body_text: r.get(13)?,
+                        has_attachments: r.get::<_, i64>(14)? != 0,
+                        is_read: r.get::<_, i64>(15)? != 0,
+                        is_flagged: r.get::<_, i64>(16)? != 0,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
     }
 }
 
@@ -338,7 +427,7 @@ mod tests {
         let (account_id, folder_id) = seed(&store);
         let from = Address {
             name: Some("山田".into()),
-            email: "yamada@client.jp".into(),
+            email: "yamada@client-a.example".into(),
         };
         let m = NewMessage {
             account_id,
@@ -392,5 +481,147 @@ mod tests {
             })
             .unwrap();
         assert!(miss.is_empty());
+    }
+
+    #[test]
+    fn folder_uidvalidity_roundtrips() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let _ = account_id;
+        assert_eq!(store.folder_uidvalidity(folder_id).unwrap(), None);
+        store.set_folder_uidvalidity(folder_id, 12345).unwrap();
+        assert_eq!(store.folder_uidvalidity(folder_id).unwrap(), Some(12345));
+    }
+
+    #[test]
+    fn reset_folder_uid_zeroes_last_uid() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: None,
+            email: "sato@client-a.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid: 7,
+            message_id: None,
+            thread_key: "subj:x",
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject: "x",
+            date: Utc::now(),
+            snippet: "x",
+            body_text: "x",
+            body_html: None,
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        store.insert_message(&m).unwrap();
+        assert_eq!(store.folder_last_uid(folder_id).unwrap(), 7);
+
+        store.reset_folder_uid(folder_id).unwrap();
+        assert_eq!(store.folder_last_uid(folder_id).unwrap(), 0);
+    }
+
+    #[test]
+    fn get_message_roundtrips_and_returns_none_when_missing() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: Some("山田".into()),
+            email: "yamada@client-a.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid: 9,
+            message_id: Some("<a@b>"),
+            thread_key: "見積の件",
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject: "Re: 見積の件",
+            date: Utc::now(),
+            snippet: "お世話になっております",
+            body_text: "お世話になっております。見積書を添付いたします。",
+            body_html: None,
+            has_attachments: true,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        let id = store.insert_message(&m).unwrap().unwrap();
+
+        let fetched = store.get_message(id).unwrap().unwrap();
+        assert_eq!(fetched.subject, "Re: 見積の件");
+        assert_eq!(
+            fetched.body_text,
+            "お世話になっております。見積書を添付いたします。"
+        );
+        assert_eq!(fetched.folder_path, "INBOX");
+        assert_eq!(fetched.uid, 9);
+
+        assert!(store.get_message(id + 1000).unwrap().is_none());
+    }
+
+    #[test]
+    fn insert_attachment_meta_leaves_path_null() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: None,
+            email: "sato@client-a.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid: 1,
+            message_id: None,
+            thread_key: "subj:x",
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject: "x",
+            date: Utc::now(),
+            snippet: "x",
+            body_text: "x",
+            body_html: None,
+            has_attachments: true,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        let message_id = store.insert_message(&m).unwrap().unwrap();
+
+        store
+            .insert_attachment_meta(message_id, "notes.txt", "text/plain", 42)
+            .unwrap();
+
+        let (filename, mime, size, path): (String, String, i64, Option<String>) = store
+            .conn()
+            .query_row(
+                "SELECT filename, mime, size, path FROM attachments WHERE message_id = ?1",
+                params![message_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(filename, "notes.txt");
+        assert_eq!(mime, "text/plain");
+        assert_eq!(size, 42);
+        assert_eq!(path, None);
+
+        let count: i64 = store
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM attachments WHERE message_id = ?1",
+                params![message_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
