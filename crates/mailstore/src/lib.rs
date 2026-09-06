@@ -2,9 +2,9 @@
 //!
 //! 設計方針:
 //! - スキーマは `schema.sql` に集約。`Store::open` が冪等に適用する。
-//! - 生の .eml はファイル（`data/mail/<account>/<folder>/<uid>.eml`）に置き、
+//! - 生の .eml はファイル（`<data_dir>/mail/<account_id>/<folder>/<uid>.eml`）に置き、
 //!   DB にはパースした結果と `raw_path` だけを持つ。MCP が落ちていても
-//!   Claude がファイルとして読める保険。
+//!   Claude がファイルとして読める保険。`data_dir` は `paths` モジュールが決める。
 //! - 全文検索は FTS5 trigram。日本語の部分一致が効く。
 
 pub mod paths;
@@ -170,21 +170,31 @@ impl Store {
             "SELECT id, name, kind, email, project_tag, settings_json, created_at
              FROM accounts ORDER BY id",
         )?;
-        let rows = stmt.query_map([], |r| {
-            let kind: String = r.get(2)?;
-            let settings: String = r.get(5)?;
-            let created: String = r.get(6)?;
-            Ok(Account {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                kind: AccountKind::parse(&kind).unwrap_or(AccountKind::Imap),
-                email: r.get(3)?,
-                project_tag: r.get(4)?,
-                settings: serde_json::from_str(&settings).unwrap_or_default(),
-                created_at: parse_ts(&created),
-            })
-        })?;
+        let rows = stmt.query_map([], row_to_account)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// 1 アカウントを id で引く。見つからなければ `Ok(None)`。
+    pub fn get_account(&self, id: i64) -> Result<Option<Account>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, name, kind, email, project_tag, settings_json, created_at
+                 FROM accounts WHERE id = ?1",
+                params![id],
+                row_to_account,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// アカウントを消す。folders / messages / attachments は
+    /// ON DELETE CASCADE で一緒に消える。消せたら true。
+    pub fn delete_account(&self, id: i64) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        Ok(changed > 0)
     }
 
     // ---- folders --------------------------------------------------------
@@ -574,6 +584,23 @@ impl Store {
             drafts,
         })
     }
+}
+
+/// `list_accounts` / `get_account` で共有する行マッピング。
+/// 列の並びは両方の SELECT で揃えてあること。
+fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
+    let kind: String = r.get(2)?;
+    let settings: String = r.get(5)?;
+    let created: String = r.get(6)?;
+    Ok(Account {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        kind: AccountKind::parse(&kind).unwrap_or(AccountKind::Imap),
+        email: r.get(3)?,
+        project_tag: r.get(4)?,
+        settings: serde_json::from_str(&settings).unwrap_or_default(),
+        created_at: parse_ts(&created),
+    })
 }
 
 /// `get_message` / `thread_messages` で共有する行マッピング。
@@ -1440,6 +1467,46 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn get_account_returns_none_for_a_missing_id() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+        assert!(store.get_account(account_id + 1000).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_account_removes_the_account_and_its_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        assert!(store.delete_account(account_id).unwrap());
+        assert!(store.list_accounts().unwrap().is_empty());
+        assert!(store
+            .list_threads(&ThreadQuery::default())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn delete_account_returns_false_when_nothing_matched() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+        assert!(!store.delete_account(account_id + 1000).unwrap());
     }
 
     #[test]
