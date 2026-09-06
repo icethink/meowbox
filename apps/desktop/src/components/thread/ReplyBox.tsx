@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { generateAiDraft, sendDraft } from '../../api';
+import { createDraft, generateAiDraft, sendDraft } from '../../api';
 import { useAppStore } from '../../store/app';
 import { Modal } from '../ui/Modal';
 
@@ -14,7 +14,16 @@ export const REPLY_INPUT_ID = 'reply-input';
  * 一度も読まずに送ってしまうのが一番まずいので、未編集のまま送ろうとしたときだけ
  * 確認ダイアログを挟む。
  */
-export function ReplyBox({ threadKey, placeholder }: { threadKey: string; placeholder: string }) {
+export function ReplyBox({
+  threadKey,
+  placeholder,
+  inReplyTo,
+}: {
+  threadKey: string;
+  placeholder: string;
+  /** 返信元のメッセージ id。下書きの保存先が決まらないので null なら保存しない */
+  inReplyTo: number | null;
+}) {
   const body = useAppStore((s) => s.replyBody);
   const isUneditedAiDraft = useAppStore((s) => s.replyIsUneditedAiDraft);
   const setBody = useAppStore((s) => s.setReplyBody);
@@ -30,8 +39,14 @@ export function ReplyBox({ threadKey, placeholder }: { threadKey: string; placeh
     try {
       const draft = await generateAiDraft(threadKey);
       insertAiDraft(draft);
-      // TODO: 次の単位で in_reply_to を渡す
-      // await createDraft({ in_reply_to: threadKey, body: draft });
+      if (inReplyTo !== null) {
+        try {
+          await createDraft({ in_reply_to: inReplyTo, body: draft });
+        } catch (err) {
+          console.error(err);
+          showToast('下書きの保存に失敗しました');
+        }
+      }
     } finally {
       setGenerating(false);
     }

@@ -1,10 +1,26 @@
 import { useState } from 'react';
 import { Paperclip } from 'lucide-react';
+import { openAttachment } from '../../api';
+import { useAppStore } from '../../store/app';
 import type { ThreadMessageView } from '../../types.ui';
 import { RichText } from './RichText';
 
 export function MessageItem({ message }: { message: ThreadMessageView }) {
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [openingId, setOpeningId] = useState<number | null>(null);
+  const showToast = useAppStore((s) => s.showToast);
+
+  async function handleOpenAttachment(id: number) {
+    setOpeningId(id);
+    try {
+      await openAttachment(id);
+    } catch (err) {
+      console.error(err);
+      showToast('添付を開けませんでした');
+    } finally {
+      setOpeningId(null);
+    }
+  }
 
   return (
     <article className="flex flex-col gap-[6px]">
@@ -51,7 +67,9 @@ export function MessageItem({ message }: { message: ThreadMessageView }) {
                 key={a.id}
                 type="button"
                 title={`${a.filename} (${a.size_label})`}
-                className="inline-flex items-center gap-[5px] rounded-sm border border-line-strong px-[10px] py-[3px] font-mono text-11 text-muted transition-colors hover:bg-selected hover:text-primary"
+                disabled={openingId === a.id}
+                onClick={() => void handleOpenAttachment(a.id)}
+                className="inline-flex items-center gap-[5px] rounded-sm border border-line-strong px-[10px] py-[3px] font-mono text-11 text-muted transition-colors hover:bg-selected hover:text-primary disabled:opacity-60"
               >
                 <Paperclip size={11} strokeWidth={2} aria-hidden="true" />
                 {a.filename}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { ThreadList } from './components/list/ThreadList';
@@ -10,10 +10,17 @@ import { AccountWizard } from './components/onboarding/AccountWizard';
 import { EmptyState } from './components/onboarding/EmptyState';
 import { Toast } from './components/ui/Toast';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { mockThreadDetails, mockThreads } from './mock/threads';
-import { mockViews } from './mock/accounts';
-import { listAccounts, syncAccount } from './api';
+import {
+  getThread,
+  listAccounts,
+  listThreads,
+  listViews,
+  mark,
+  onSyncProgress,
+  syncAccount,
+} from './api';
 import type { Account } from './types';
+import type { ThreadDetail, ThreadListItem, ViewItemView } from './types.ui';
 import { useAppStore } from './store/app';
 
 export default function App() {
@@ -21,9 +28,6 @@ export default function App() {
     rightPanelOpen,
     selectedThreadKey,
     selectThread,
-    archivedKeys,
-    archiveThread,
-    readKeys,
     activeProjectTag,
     activeView,
     accountWizardOpen,
@@ -31,46 +35,90 @@ export default function App() {
   } = useAppStore();
 
   const [accounts, setAccounts] = useState<Account[] | null>(null);
+  const [threads, setThreads] = useState<ThreadListItem[]>([]);
+  const [views, setViews] = useState<ViewItemView[]>([]);
+  const [selected, setSelected] = useState<ThreadDetail | null>(null);
 
   async function refreshAccounts() {
     const list = await listAccounts();
     setAccounts(list);
   }
 
+  const refreshThreads = useCallback(async () => {
+    const list = await listThreads({ project_tag: activeProjectTag, view: activeView });
+    setThreads(list);
+  }, [activeProjectTag, activeView]);
+
+  const refreshViews = useCallback(async () => {
+    const list = await listViews();
+    setViews(list);
+  }, []);
+
   useEffect(() => {
     void refreshAccounts();
   }, []);
+
+  useEffect(() => {
+    void refreshViews();
+  }, [refreshViews]);
+
+  useEffect(() => {
+    void refreshThreads();
+  }, [refreshThreads]);
+
+  // 同期が完了したら一覧・ビュー件数を読み直す
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      unlisten = await onSyncProgress((e) => {
+        if (e.done) {
+          void refreshThreads();
+          void refreshViews();
+        }
+      });
+    })();
+    return () => unlisten?.();
+  }, [refreshThreads, refreshViews]);
 
   function handleAdded(accountId: number) {
     void syncAccount(accountId);
     void refreshAccounts();
   }
 
-  const threads = useMemo(
-    () =>
-      mockThreads
-        .filter((t) => !archivedKeys.includes(t.thread_key))
-        .filter((t) => !activeProjectTag || t.project_tag === activeProjectTag)
-        // 開いたスレッドは既読にする
-        .map((t) => (readKeys.includes(t.thread_key) ? { ...t, is_unread: false } : t)),
-    [archivedKeys, activeProjectTag, readKeys],
-  );
+  // 選択中のスレッドの詳細を読み直す
+  useEffect(() => {
+    if (!selectedThreadKey) {
+      setSelected(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const detail = await getThread(selectedThreadKey);
+      if (!cancelled) setSelected(detail);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedThreadKey]);
 
   const threadKeys = useMemo(() => threads.map((t) => t.thread_key), [threads]);
   useKeyboardShortcuts({ threadKeys, selectedThreadKey });
 
-  const selected = selectedThreadKey ? (mockThreadDetails[selectedThreadKey] ?? null) : null;
-  const view = mockViews.find((v) => v.key === activeView);
+  const view = views.find((v) => v.key === activeView);
   const listTitle = view?.label ?? 'すべて';
-  // 案件で絞っているときは実件数、そうでなければビューの総数を出す
-  // （モックは 24 スレッドのうち先頭 6 件だけを持っている）
+  // 案件で絞っているときは表示中の件数、そうでなければビューの総数を出す
   const listCount = activeProjectTag ? threads.length : (view?.count ?? threads.length);
 
   /** アーカイブしたら、その位置にあった次のスレッドへ選択を送る */
-  function handleArchive(key: string) {
+  async function handleArchive(key: string) {
     const index = threadKeys.indexOf(key);
     const after = threadKeys[index + 1] ?? threadKeys[index - 1];
-    archiveThread(key);
+    const detail = selected && selected.thread_key === key ? selected : await getThread(key);
+    const ids = detail?.messages.map((m) => m.id) ?? [];
+    if (ids.length > 0) {
+      await mark(ids, 'archive');
+    }
+    await refreshThreads();
     if (after) selectThread(after);
   }
 
@@ -92,7 +140,7 @@ export default function App() {
                   thread={t}
                   selected={t.thread_key === selectedThreadKey}
                   onSelect={() => selectThread(t.thread_key)}
-                  onArchive={() => handleArchive(t.thread_key)}
+                  onArchive={() => void handleArchive(t.thread_key)}
                 />
               ))}
             </ThreadList>
@@ -100,7 +148,7 @@ export default function App() {
           thread={
             <ThreadView
               thread={selected}
-              onArchive={() => selectedThreadKey && handleArchive(selectedThreadKey)}
+              onArchive={() => selectedThreadKey && void handleArchive(selectedThreadKey)}
             />
           }
           panel={rightPanelOpen ? <DigestPanel /> : null}

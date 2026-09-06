@@ -34,7 +34,11 @@ export function ThreadView({
         </div>
       </div>
 
-      <ReplyBox threadKey={thread.thread_key} placeholder={thread.reply_placeholder} />
+      <ReplyBox
+        threadKey={thread.thread_key}
+        placeholder={thread.reply_placeholder}
+        inReplyTo={thread.messages.at(-1)?.id ?? null}
+      />
     </section>
   );
 }

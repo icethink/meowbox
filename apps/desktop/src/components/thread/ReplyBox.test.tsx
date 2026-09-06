@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/app';
 import { ReplyBox } from './ReplyBox';
 
 function setup() {
-  return render(<ReplyBox threadKey="th-estimate" placeholder="山田さんへ返信…" />);
+  return render(<ReplyBox threadKey="th-estimate" placeholder="山田さんへ返信…" inReplyTo={1} />);
 }
 
 describe('ReplyBox', () => {
