@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { createDraft, generateAiDraft, sendDraft } from '../../api';
+import { createDraft, generateAiDraft, sendAvailable, sendDraft } from '../../api';
 import { useAppStore } from '../../store/app';
 import { Modal } from '../ui/Modal';
 
@@ -33,6 +33,7 @@ export function ReplyBox({
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -53,19 +54,43 @@ export function ReplyBox({
   }
 
   async function reallySend() {
-    await sendDraft({ thread_key: threadKey, body });
-    clearReply();
-    setConfirmOpen(false);
-    showToast('送信しました');
+    try {
+      await sendDraft({ thread_key: threadKey, body });
+      clearReply();
+      setConfirmOpen(false);
+      showToast('送信しました');
+    } catch (err) {
+      console.error(err);
+      setConfirmOpen(false);
+      showToast('送信に失敗しました');
+    }
   }
 
   function handleSend() {
+    // 送信はまだ実装していない（CLAUDE.md の安全境界）。ボタンも disabled にしているが、
+    // 念のためここでも到達させない
+    if (!sendAvailable) return;
     if (body.trim() === '') return;
     if (isUneditedAiDraft) {
       setConfirmOpen(true);
       return;
     }
     void reallySend();
+  }
+
+  async function handleSaveDraft() {
+    if (inReplyTo === null) return;
+    if (body.trim() === '') return;
+    setSavingDraft(true);
+    try {
+      await createDraft({ in_reply_to: inReplyTo, body });
+      showToast('下書きを保存しました');
+    } catch (err) {
+      console.error(err);
+      showToast('下書きの保存に失敗しました');
+    } finally {
+      setSavingDraft(false);
+    }
   }
 
   return (
@@ -105,12 +130,24 @@ export function ReplyBox({
         <span className="text-11 text-faint">Tab で挿入 · 編集してから送信</span>
         <button
           type="button"
+          onClick={() => void handleSaveDraft()}
+          disabled={inReplyTo === null || savingDraft || body.trim() === ''}
+          className="ml-auto rounded-token border border-accent px-[14px] py-[6px] text-12 font-bold text-accent transition-colors hover:bg-accent-bg disabled:opacity-50"
+        >
+          下書きを保存
+        </button>
+        <button
+          type="button"
           onClick={handleSend}
-          className="ml-auto rounded-token bg-accent px-[16px] py-[6px] text-12 font-bold text-accent-on transition-colors hover:bg-accent-hover"
+          disabled={!sendAvailable}
+          className="rounded-token bg-accent px-[16px] py-[6px] text-12 font-bold text-accent-on transition-colors hover:bg-accent-hover disabled:opacity-50"
         >
           確認して送信
         </button>
       </div>
+      {!sendAvailable && (
+        <span className="text-11 text-faint">送信は未対応です（下書きの保存まで）</span>
+      )}
 
       <Modal
         open={confirmOpen}

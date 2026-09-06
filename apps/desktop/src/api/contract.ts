@@ -40,6 +40,9 @@ export interface ThreadQuery {
 export type MarkAction = 'read' | 'unread' | 'flag' | 'unflag' | 'archive' | 'unarchive';
 
 export interface MeowboxApi {
+  /** 送信が実装済みか。MVP では常に false（下書きの保存まで。CLAUDE.md の安全境界） */
+  sendAvailable: boolean;
+
   listAccounts(): Promise<Account[]>;
   addAccount(input: NewAccountInput): Promise<Account>;
   setAccountPassword(id: number, password: string): Promise<void>;

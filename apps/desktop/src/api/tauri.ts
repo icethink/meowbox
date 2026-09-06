@@ -57,6 +57,9 @@ import {
 /** Rust 側の `SYNC_PROGRESS_EVENT` と一致させること */
 const SYNC_PROGRESS_EVENT = 'sync://progress';
 
+/** 送信はまだ実装していない（下書きの保存まで。CLAUDE.md の安全境界） */
+export const sendAvailable = false;
+
 export async function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>('list_accounts');
 }
@@ -261,13 +264,14 @@ export async function generateAiDraft(threadKey: string): Promise<string> {
   return mockAiDraftBodies[threadKey] ?? defaultAiDraftBody;
 }
 
-/** 「確認して送信」。人間が承認したときだけ呼ばれる */
-export async function sendDraft(input: { thread_key: string; body: string }): Promise<void> {
-  // TODO(P3): invoke('send_draft', input) で mailsync の SMTP に流す
-  void input;
+/** 「確認して送信」。送信はまだ実装していない（CLAUDE.md の安全境界） */
+// TODO(P3-b): SMTP を繋いだら sendAvailable を true にする
+export async function sendDraft(_input: { thread_key: string; body: string }): Promise<void> {
+  throw new Error('送信はまだ実装されていません');
 }
 
 export const tauriApi = {
+  sendAvailable,
   listAccounts,
   addAccount,
   setAccountPassword,

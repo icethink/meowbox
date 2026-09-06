@@ -25,6 +25,9 @@ import { mockDigest } from '../mock/digest';
 import { defaultAiDraftBody, mockAiDraftBodies } from '../mock/drafts';
 import type { MarkAction, MeowboxApi, ThreadQuery } from './contract';
 
+/** 送信はまだ実装していない（下書きの保存まで。モックでも嘘の成功を出さない） */
+export const sendAvailable = false;
+
 export async function listAccounts(): Promise<Account[]> {
   return mockAccounts;
 }
@@ -177,13 +180,14 @@ export async function generateAiDraft(threadKey: string): Promise<string> {
   return mockAiDraftBodies[threadKey] ?? defaultAiDraftBody;
 }
 
-/** 「確認して送信」。人間が承認したときだけ呼ばれる */
-export async function sendDraft(input: { thread_key: string; body: string }): Promise<void> {
-  // TODO(P3): invoke('send_draft', input) で mailsync の SMTP に流す
-  void input;
+/** 「確認して送信」。送信はまだ実装していない（モックでも嘘の成功を出さない） */
+// TODO(P3-b): SMTP を繋いだら sendAvailable を true にする
+export async function sendDraft(_input: { thread_key: string; body: string }): Promise<void> {
+  throw new Error('送信はまだ実装されていません');
 }
 
 export const mockApi = {
+  sendAvailable,
   listAccounts,
   addAccount,
   setAccountPassword,
