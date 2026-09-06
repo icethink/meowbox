@@ -25,7 +25,7 @@ export function ThreadView({
       <ThreadHeader thread={thread} onArchive={onArchive} />
 
       <div className="flex flex-1 flex-col gap-[14px] overflow-y-auto px-[20px] py-[16px]">
-        {thread.summary && <AiSummaryCard summary={thread.summary} />}
+        <AiSummaryCard summary={thread.summary} />
         <ExtractedTasks tasks={thread.tasks} />
         <div className="mt-[4px] flex flex-col gap-[12px]">
           {thread.messages.map((m) => (
