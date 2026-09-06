@@ -8,6 +8,7 @@ import type { Account } from '../types';
 import type {
   DraftDto,
   LastSync,
+  McpIntegration,
   MessageDto,
   NewAccountInput,
   NewDraftInput,
@@ -53,6 +54,9 @@ export interface MeowboxApi {
 
   listProjects(): Promise<ProjectGroupView[]>;
   listViews(): Promise<ViewItemView[]>;
+
+  /** Claude Desktop / Claude Code に meowbox-mcp を登録するためのコピペ用情報 */
+  mcpIntegration(): Promise<McpIntegration>;
 
   listThreads(query?: ThreadQuery): Promise<ThreadListItem[]>;
   getThread(threadKey: string): Promise<ThreadDetail | null>;

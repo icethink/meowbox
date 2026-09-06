@@ -54,6 +54,7 @@ pub fn run() {
             commands::threads::view_counts,
             commands::drafts::create_draft,
             commands::drafts::list_drafts,
+            commands::mcp::mcp_integration,
         ])
         .run(tauri::generate_context!())
         .expect("error while running meowbox");

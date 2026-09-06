@@ -2,9 +2,10 @@
  * 歯車から開く設定モーダル。アカウント一覧・再同期・削除だけを扱う。
  * 削除は `window.confirm` を使わず、行の中身をインライン確認に差し替える。
  */
-import { useEffect, useState } from 'react';
-import { deleteAccount, listAccounts, syncAccount } from '../../api';
+import { useEffect, useRef, useState } from 'react';
+import { deleteAccount, listAccounts, mcpIntegration, syncAccount } from '../../api';
 import type { Account } from '../../types';
+import type { McpIntegration } from '../../types.api';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
 
@@ -98,6 +99,81 @@ function AccountRow({
   );
 }
 
+/** クリップボードにコピーするボタン。成功したら 2 秒だけラベルを変える */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // クリップボードが使えない環境でも画面を壊さない
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      className="shrink-0 rounded-token bg-accent px-[10px] py-[4px] text-12 font-bold text-accent-on transition-colors hover:bg-accent-hover"
+    >
+      {copied ? 'コピーしました' : 'コピー'}
+    </button>
+  );
+}
+
+/** Claude Desktop / Claude Code への登録に使うコピペ用の節。人間が行う設定操作なので accent 系の色を使う */
+function ClaudeIntegrationSection({ mcp }: { mcp: McpIntegration | null }) {
+  return (
+    <div className="mt-[16px] border-t border-line pt-[16px]">
+      <h3 className="mb-[6px] text-base font-bold text-primary">Claude 連携</h3>
+      <p className="mb-[10px] text-12 text-secondary">
+        Claude Desktop / Claude Code から Meowbox のメールを検索・要約できるようにします。
+        設定ファイルは自動で書き換えません。下の内容をコピーして貼ってください。
+      </p>
+
+      {mcp && !mcp.server_exists && (
+        <p className="mb-[10px] text-12 text-warn">
+          meowbox-mcp が見つかりません（開発中は `pnpm mcp:build` を実行してください）
+        </p>
+      )}
+
+      {mcp && (
+        <div className="flex flex-col gap-[12px]">
+          <div>
+            <div className="mb-[4px] flex items-center justify-between gap-[10px]">
+              <span className="text-12 font-bold text-secondary">Claude Desktop</span>
+              <CopyButton text={mcp.desktop_config_json} />
+            </div>
+            <pre className="overflow-x-auto rounded-token border border-line bg-subtle p-[10px] font-mono text-11 text-body">
+              {mcp.desktop_config_json}
+            </pre>
+          </div>
+
+          <div>
+            <div className="mb-[4px] flex items-center justify-between gap-[10px]">
+              <span className="text-12 font-bold text-secondary">Claude Code / Cowork</span>
+              <CopyButton text={mcp.claude_code_command} />
+            </div>
+            <pre className="overflow-x-auto rounded-token border border-line bg-subtle p-[10px] font-mono text-11 text-body">
+              {mcp.claude_code_command}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({
   open,
   onClose,
@@ -111,6 +187,7 @@ export function SettingsModal({
   const [syncingId, setSyncingId] = useState<number | null>(null);
   const [syncErrors, setSyncErrors] = useState<Record<number, string>>({});
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  const [mcp, setMcp] = useState<McpIntegration | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -119,6 +196,7 @@ export function SettingsModal({
       return;
     }
     void listAccounts().then(setAccounts);
+    void mcpIntegration().then(setMcp);
   }, [open]);
 
   async function reloadAccounts() {
@@ -188,6 +266,8 @@ export function SettingsModal({
           ))}
         </div>
       )}
+
+      <ClaudeIntegrationSection mcp={mcp} />
     </Modal>
   );
 }

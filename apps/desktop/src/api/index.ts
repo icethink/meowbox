@@ -23,6 +23,7 @@ export const deleteAccount = impl.deleteAccount;
 
 export const listProjects = impl.listProjects;
 export const listViews = impl.listViews;
+export const mcpIntegration = impl.mcpIntegration;
 
 export const listThreads = impl.listThreads;
 export const getThread = impl.getThread;
