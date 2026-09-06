@@ -78,6 +78,29 @@ export interface MessageSummary {
   is_read: boolean;
 }
 
+/** mailcore::ThreadSummary — スレッド一覧の戻り値。最新メッセージの情報を代表させる */
+export interface ThreadSummary {
+  thread_key: string;
+  /** 最新メッセージのアカウント */
+  account_id: AccountId;
+  project_tag: string | null;
+  /** 最新メッセージの id */
+  latest_message_id: MessageId;
+  /** 最新メッセージの件名 */
+  subject: string;
+  /** 最新メッセージの差出人 */
+  from: Address;
+  snippet: string;
+  /** 最新メッセージの日時 */
+  last_date: Timestamp;
+  message_count: number;
+  unread_count: number;
+  /** スレッド内に 1 通でも添付があれば true */
+  has_attachments: boolean;
+  /** スレッド内に 1 通でもフラグがあれば true */
+  is_flagged: boolean;
+}
+
 /** mailcore::Task — confidence が低いものは UI で「候補」扱いにする */
 export interface Task {
   id: number;

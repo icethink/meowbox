@@ -53,6 +53,8 @@ export interface ThreadListItem {
   subject: string;
   /** Claude が付けた 1 行要約。--ai で表示する */
   ai_snippet: string | null;
+  /** Claude の要約が無いときに出す本文の抜粋 */
+  snippet: string;
   /** "10:24" / "昨日" / "8/29" のような表示用ラベル */
   time_label: string;
   date: Timestamp;
