@@ -209,6 +209,8 @@ fn get_thread_impl(store: &Store, thread_key: &str) -> Result<ThreadDetailDto, A
         .latest_summary(&format!("thread:{thread_key}"))?
         .map(summary_to_dto);
 
+    // TODO(P1): 全アカウントの未完了タスクを 200 件取ってから絞っている。タスクが増えると
+    // このスレッドのタスクを取りこぼすので、source_message_id で引くクエリを足す。
     let tasks = store
         .list_tasks(&TaskQuery {
             status: Some(TaskStatus::Open),
