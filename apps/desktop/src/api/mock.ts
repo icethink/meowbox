@@ -27,6 +27,8 @@ import type { MarkAction, MeowboxApi, ThreadQuery } from './contract';
 
 /** 送信はまだ実装していない（下書きの保存まで。モックでも嘘の成功を出さない） */
 export const sendAvailable = false;
+/** モックでは見た目確認のために Claude の下書き生成を動かす */
+export const aiDraftAvailable = true;
 
 export async function listAccounts(): Promise<Account[]> {
   return mockAccounts;
@@ -188,6 +190,7 @@ export async function sendDraft(_input: { thread_key: string; body: string }): P
 
 export const mockApi = {
   sendAvailable,
+  aiDraftAvailable,
   listAccounts,
   addAccount,
   setAccountPassword,

@@ -13,6 +13,7 @@ const useMock = import.meta.env.VITE_MEOWBOX_MOCK === '1';
 const impl = useMock ? mockApi : tauriApi;
 
 export const sendAvailable = impl.sendAvailable;
+export const aiDraftAvailable = impl.aiDraftAvailable;
 
 export const listAccounts = impl.listAccounts;
 export const addAccount = impl.addAccount;

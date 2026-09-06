@@ -35,7 +35,6 @@ import type {
   ThreadFilter,
   ViewCountsDto,
 } from '../types.api';
-import { defaultAiDraftBody, mockAiDraftBodies } from '../mock/drafts';
 import type {
   Digest,
   ProjectGroupView,
@@ -59,6 +58,8 @@ const SYNC_PROGRESS_EVENT = 'sync://progress';
 
 /** 送信はまだ実装していない（下書きの保存まで。CLAUDE.md の安全境界） */
 export const sendAvailable = false;
+/** Claude の下書き生成は P1 で MCP 経由に繋ぐまで使えない */
+export const aiDraftAvailable = false;
 
 export async function listAccounts(): Promise<Account[]> {
   return invoke<Account[]>('list_accounts');
@@ -257,11 +258,12 @@ export async function listDrafts(): Promise<DraftDto[]> {
 }
 
 /**
- * Claude に返信下書きを書かせる。P3 で MCP / Claude API に繋ぐ。
- * それまでは既存のまま（中身は据え置き）。
+ * Claude に返信下書きを書かせる。まだ使えない（P1 で MCP 経由に繋ぐ）。
+ * モックの作文を実データ実装に混ぜないため、ここでは `src/mock/` を import しない。
  */
-export async function generateAiDraft(threadKey: string): Promise<string> {
-  return mockAiDraftBodies[threadKey] ?? defaultAiDraftBody;
+// TODO(P1): MCP 経由で Claude に書かせる
+export async function generateAiDraft(_threadKey: string): Promise<string> {
+  throw new Error('Claude の下書きはまだ使えません');
 }
 
 /** 「確認して送信」。送信はまだ実装していない（CLAUDE.md の安全境界） */
@@ -272,6 +274,7 @@ export async function sendDraft(_input: { thread_key: string; body: string }): P
 
 export const tauriApi = {
   sendAvailable,
+  aiDraftAvailable,
   listAccounts,
   addAccount,
   setAccountPassword,

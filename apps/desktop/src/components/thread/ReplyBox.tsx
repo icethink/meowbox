@@ -1,6 +1,12 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { createDraft, generateAiDraft, sendAvailable, sendDraft } from '../../api';
+import {
+  aiDraftAvailable,
+  createDraft,
+  generateAiDraft,
+  sendAvailable,
+  sendDraft,
+} from '../../api';
 import { useAppStore } from '../../store/app';
 import { Modal } from '../ui/Modal';
 
@@ -121,7 +127,8 @@ export function ReplyBox({
         <button
           type="button"
           onClick={handleGenerate}
-          disabled={generating}
+          disabled={generating || !aiDraftAvailable}
+          title={aiDraftAvailable ? undefined : 'Claude の下書きは P1 で対応'}
           className="inline-flex items-center gap-[6px] rounded-token border border-ai-line-strong px-[11px] py-[5px] text-sm text-ai transition-colors hover:bg-ai-bg-hover disabled:opacity-60"
         >
           <Sparkles size={12} strokeWidth={2} aria-hidden="true" />

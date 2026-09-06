@@ -42,6 +42,8 @@ export type MarkAction = 'read' | 'unread' | 'flag' | 'unflag' | 'archive' | 'un
 export interface MeowboxApi {
   /** 送信が実装済みか。MVP では常に false（下書きの保存まで。CLAUDE.md の安全境界） */
   sendAvailable: boolean;
+  /** Claude の下書き生成が使えるか。P1 で MCP 経由に繋ぐまで false */
+  aiDraftAvailable: boolean;
 
   listAccounts(): Promise<Account[]>;
   addAccount(input: NewAccountInput): Promise<Account>;

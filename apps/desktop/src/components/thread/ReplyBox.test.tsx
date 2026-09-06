@@ -84,3 +84,23 @@ describe('ReplyBox', () => {
     expect(screen.getByRole('button', { name: '確認して送信' })).toBeDisabled();
   });
 });
+
+describe('ReplyBox (aiDraftAvailable = false)', () => {
+  it('Claude の下書きが使えないときは「AI で下書き」が disabled', async () => {
+    vi.resetModules();
+    vi.doMock('../../api', () => ({
+      createDraft: vi.fn(),
+      generateAiDraft: vi.fn(),
+      sendDraft: vi.fn(),
+      sendAvailable: false,
+      aiDraftAvailable: false,
+    }));
+
+    const { ReplyBox: ReplyBoxAiOff } = await import('./ReplyBox');
+    render(<ReplyBoxAiOff threadKey="th-estimate" placeholder="山田さんへ返信…" inReplyTo={1} />);
+
+    const button = screen.getByRole('button', { name: /AI で下書き/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'Claude の下書きは P1 で対応');
+  });
+});
