@@ -1211,6 +1211,77 @@ mod tests {
     }
 
     #[test]
+    fn thread_messages_returns_the_thread_in_date_order() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let t_early = Utc::now() - chrono::Duration::hours(2);
+        let t_same = Utc::now() - chrono::Duration::hours(1);
+        let t_late = Utc::now();
+
+        // わざと日付昇順にならない順で挿入する。
+        let id_late = insert_msg(
+            &store, account_id, folder_id, 1, "t1", "遅い", None, t_late, false, false, false,
+        );
+        let id_early = insert_msg(
+            &store, account_id, folder_id, 2, "t1", "早い", None, t_early, false, false, false,
+        );
+        let id_same_a = insert_msg(
+            &store, account_id, folder_id, 3, "t1", "同着1", None, t_same, false, false, false,
+        );
+        let id_same_b = insert_msg(
+            &store, account_id, folder_id, 4, "t1", "同着2", None, t_same, false, false, false,
+        );
+        insert_msg(
+            &store, account_id, folder_id, 5, "t2", "別スレッド", None, Utc::now(), false, false,
+            false,
+        );
+
+        let messages = store.thread_messages("t1").unwrap();
+        let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+        // 日付昇順、同日時なら id 昇順。
+        assert_eq!(ids, vec![id_early, id_same_a, id_same_b, id_late]);
+        assert!(messages.iter().all(|m| !m.body_text.is_empty()));
+        assert!(messages.iter().all(|m| m.thread_key == "t1"));
+    }
+
+    #[test]
+    fn unread_counts_by_account_counts_only_unread_and_unarchived() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_a, folder_a) = seed(&store);
+        let acc_b = store
+            .add_account(
+                "test-b",
+                AccountKind::Imap,
+                "b@example.com",
+                Some("案件B"),
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        let folder_b = store.ensure_folder(acc_b.id, "INBOX", "inbox").unwrap();
+
+        // アカウント A: 未読1、既読1、未読だがアーカイブ済み1。
+        insert_msg(
+            &store, account_a, folder_a, 1, "a1", "未読", None, Utc::now(), false, false, false,
+        );
+        insert_msg(
+            &store, account_a, folder_a, 2, "a2", "既読", None, Utc::now(), true, false, false,
+        );
+        let archived_id = insert_msg(
+            &store, account_a, folder_a, 3, "a3", "未読アーカイブ済み", None, Utc::now(), false,
+            false, false,
+        );
+        store.set_archived(&[archived_id], true).unwrap();
+
+        // アカウント B: 全て既読なので未読数 0。結果に出てこないはず。
+        insert_msg(
+            &store, acc_b.id, folder_b, 1, "b1", "既読B", None, Utc::now(), true, false, false,
+        );
+
+        let counts = store.unread_counts_by_account().unwrap();
+        assert_eq!(counts, vec![(account_a, 1)]);
+    }
+
+    #[test]
     fn migrates_v1_database_to_v2() {
         let mut path = std::env::temp_dir();
         path.push(format!(
