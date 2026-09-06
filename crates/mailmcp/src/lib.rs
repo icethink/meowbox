@@ -9,12 +9,13 @@
 //!   list_accounts, search_messages, get_thread, get_message, get_attachment,
 //!   inbox_digest, save_summary, upsert_tasks, list_tasks, create_draft
 //!
-//! 現状: `list_accounts` / `list_projects` を実装済み（`main.rs`）。
-//! TODO(P1): 残りのツールを rmcp で実装する。ここではその入出力の型だけ先に固定しておく。
+//! 現状: 全ツールを実装済み（`main.rs`）。ここには各ツールの引数の型だけを置く
+//! （出力の DTO は `main.rs` 側にある）。
 
+use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchMessagesArgs {
     pub query: Option<String>,
     pub account_id: Option<i64>,
@@ -31,21 +32,31 @@ fn default_limit() -> usize {
     30
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetThreadArgs {
     pub thread_key: String,
     #[serde(default)]
     pub include_quotes: bool,
 }
 
-#[derive(Debug, Deserialize)]
+/// `get_message` の引数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetMessageArgs {
+    pub id: i64,
+    /// `body_html` を返すかどうか。
+    /// TODO: body_html を Store から取れるようにする（現状は無視される）。
+    #[serde(default)]
+    pub include_html: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct InboxDigestArgs {
     pub project: Option<String>,
     /// RFC3339。省略時は直近 24 時間。
     pub since: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SaveSummaryArgs {
     /// "message:<id>" | "thread:<key>" | "daily:<yyyy-mm-dd>"
     pub target: String,
@@ -53,12 +64,12 @@ pub struct SaveSummaryArgs {
     pub summary: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct UpsertTasksArgs {
     pub tasks: Vec<TaskInput>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TaskInput {
     pub account_id: i64,
     pub source_message_id: Option<i64>,
@@ -72,11 +83,25 @@ fn default_confidence() -> f32 {
     0.8
 }
 
-#[derive(Debug, Deserialize)]
+/// `list_tasks` の引数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListTasksArgs {
+    /// "open" | "done" | "dismissed"
+    pub status: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateDraftArgs {
     pub account_id: i64,
     pub in_reply_to: Option<i64>,
     pub to: Option<Vec<String>>,
     pub subject: Option<String>,
     pub body: String,
+}
+
+/// `get_attachment` の引数。
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetAttachmentArgs {
+    pub id: i64,
 }
