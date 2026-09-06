@@ -91,19 +91,20 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 
 | ツール | 役割 |
 |---|---|
-| `list_accounts` | アカウント・案件タグ一覧 |
-| `search_messages(query, account?, project?, since?, unread_only?, limit)` | FTS + 条件検索。返り値は軽量（id/件名/差出人/日付/snippet） |
-| `get_thread(thread_key)` | スレッドを時系列で1発取得（本文はテキスト整形済み、引用部は折り畳み） |
-| `get_message(id, include_html?)` | 単体取得 |
+| `list_accounts` | アカウント一覧（id/name/email/project_tag/kind/last_synced_at/unread_count のみ） |
+| `list_projects` | 案件（project_tag）ごとにアカウントをまとめた一覧 |
+| `search_messages(query?, account_id?, project?, since?, unread_only?, limit)` | FTS + 条件検索。返り値は軽量（id/件名/差出人/日付/snippet） |
+| `get_thread(thread_key, include_quotes?)` | スレッドを時系列で1発取得（本文はテキスト整形済み。引用部は include_quotes=true のときだけ） |
+| `get_message(id, include_html?)` | 単体取得（include_html は現状無視される） |
 | `get_attachment(id)` | ファイルパスを返す（Claude 側で Read できる） |
-| `inbox_digest(project?, since)` | 未処理メールの要約用ビュー：スレッド単位でまとめ、既存要約があれば添付 |
-| `save_summary(target, text)` | Claude が作った要約を DB に保存 |
-| `upsert_tasks(tasks[])` | タスク抽出結果を保存 |
+| `inbox_digest(project?, since?)` | 未読メールの要約用ビュー：スレッド単位でまとめ、既存要約があれば添付 |
+| `save_summary(target, model, summary)` | Claude が作った要約を DB に保存 |
+| `upsert_tasks(tasks[])` | タスク抽出結果を保存（`status` は上書きしない） |
 | `list_tasks(status?, project?)` | タスク一覧 |
-| `create_draft(in_reply_to, body, to?, subject?)` | 返信下書きを保存（**送信はしない**） |
-| `mark(ids[], read|unread|archive|flag)` | 状態操作 |
+| `create_draft(account_id, body, in_reply_to?, to?, subject?)` | 返信下書きを保存（**送信はしない**） |
 
-送信系は MVP では MCP に**出さない**。UIの「承認して送信」ボタンだけが送れる。
+**送信系と `mark`（既読・アーカイブ）は MCP に出さない**（[ADR 0002](adr/0002-no-send-over-mcp.md) /
+[ADR 0007](adr/0007-mcp-server.md)）。状態を変えるのは UI 上の人間の操作だけ。
 
 ## 7. 同期エンジン
 - アカウントごとに tokio タスクを1本。INBOX は IMAP IDLE で即時反映、他フォルダは 5〜15分ポーリング
@@ -131,17 +132,19 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 |---|---|---|
 | P0-a | workspace 雛形、mailstore スキーマ、`meowbox init / accounts / search` | ✅ 2026-09-02 |
 | P0-b | mailsync で IMAP 同期 → SQLite。手元の IMAP アカウントで動作確認 | ✅ 2026-09-04 |
-| P1 | mailmcp: `list_accounts` `search_messages` `get_thread` `inbox_digest`。Cowork から叩けることを確認 | ここで Thunderbird MCP を卒業 |
+| P1 | mailmcp: 独立 stdio バイナリ `meowbox-mcp`（11 ツール）。Claude Desktop / Claude Code から叩けることを確認 | ✅ 2026-09-06 |
 | P2 | Tauri UI: アカウント一覧・スレッド表示・検索・タスク一覧 | ✅ 2026-09-03 |
 | P3-a | `apps/desktop/src/api/` を Tauri invoke に差し替え。アカウント登録ウィザード、同期の進捗イベント、実データのスレッド・一覧表示、設定モーダル | ✅ 2026-09-06 |
 | P3-b | 要約・タスク抽出（MCP経由とアプリ内API呼び出しの両方）、`create_draft`、UI で承認送信を実データに繋ぐ | MVP 完成 |
 | P4 | Gmail / M365 OAuth、Graph バックエンド、IMAP IDLE、過去分バックフィル | 案件アドレス増加に耐える |
 | P5 | 案件タグ横断ダッシュボード、日次ダイジェスト、Thunderbird からのインポート | 便利機能 |
+| P6 | 配布: Releases でのインストーラ公開、コード署名、自動更新 | 他の人に渡せるようにする |
 
 ## 11. 未決事項
 - フロントエンドを React か Svelte か（Claude Code で量産するなら React の方が事例が多い）
 - Windows 以外（Mac/Linux）も最初から対象にするか
 - 要約に使うモデルとコスト上限（日次でいくらまで、など）
 - 案件終了後のアカウントの扱い（アーカイブして DB に残す／削除）
-- P1 で決める: MCP サーバをアプリ内でどう起動するか（stdio / HTTP）、
-  Claude Desktop / Cowork からどう見つけさせるか
+- MCP サーバをアプリ内でどう起動するか（stdio / HTTP）、Claude Desktop / Cowork から
+  どう見つけさせるか → [ADR 0007](adr/0007-mcp-server.md) で決定（独立 stdio バイナリ、
+  設定ファイルへの登録は手貼り）
