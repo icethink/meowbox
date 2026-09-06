@@ -221,7 +221,7 @@ impl SyncEngine {
                     let raw_path = opts
                         .data_dir
                         .join(account_id.to_string())
-                        .join(sanitize_folder(path))
+                        .join(crate::fsname::sanitize_path_segment(path))
                         .join(format!("{uid}.eml"));
                     tracing::warn!(
                         folder = %path,
@@ -263,7 +263,7 @@ impl SyncEngine {
         let dir = opts
             .data_dir
             .join(account_id.to_string())
-            .join(sanitize_folder(folder_path));
+            .join(crate::fsname::sanitize_path_segment(folder_path));
         std::fs::create_dir_all(&dir)?;
         let file_path = dir.join(format!("{}.eml", raw.uid));
         std::fs::write(&file_path, &raw.raw)?;
@@ -332,34 +332,6 @@ fn role_str(role: mailcore::FolderRole) -> &'static str {
 
 fn has_flag(flags: &[String], flag: &str) -> bool {
     flags.iter().any(|f| f.eq_ignore_ascii_case(flag))
-}
-
-/// フォルダ名をファイルパスの 1 セグメントとして安全に使える形にする。
-/// `/ \ : * ? " < > |` と制御文字を `_` に置換する。パス区切りや予約文字を
-/// 含まないフォルダ名（日本語含む）はそのまま通す。
-///
-/// フォルダ名は IMAP サーバ由来で信頼境界の外にある。置換後の結果が
-/// `"."` / `".."`（カレント/親ディレクトリ）や空文字列になる場合、そのまま
-/// パスセグメントとして使うと `data_dir` の外に書き込めてしまうため、
-/// 安全な別名に潰す。
-fn sanitize_folder(path: &str) -> String {
-    let replaced: String = path
-        .chars()
-        .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-
-    match replaced.as_str() {
-        "" => "_".to_string(),
-        "." => "_".to_string(),
-        ".." => "__".to_string(),
-        _ => replaced,
-    }
 }
 
 #[cfg(test)]
@@ -652,24 +624,6 @@ mod tests {
         assert_eq!(report.fetched, 3);
         assert_eq!(report.inserted, 2);
         assert_eq!(report.errors, 1);
-    }
-
-    #[test]
-    fn sanitize_folder_keeps_safe_names() {
-        assert_eq!(sanitize_folder("INBOX.送信済み"), "INBOX.送信済み");
-    }
-
-    #[test]
-    fn sanitize_folder_replaces_reserved_characters() {
-        assert_eq!(sanitize_folder("INBOX/Sent"), "INBOX_Sent");
-        assert_eq!(sanitize_folder("a\\b:c*d?e\"f<g>h|i"), "a_b_c_d_e_f_g_h_i");
-    }
-
-    #[test]
-    fn sanitize_folder_rejects_dot_only_names() {
-        assert_ne!(sanitize_folder(".."), "..");
-        assert_ne!(sanitize_folder("."), ".");
-        assert_ne!(sanitize_folder(""), "");
     }
 
     /// フェイクバックエンドが `".."` という名前のフォルダを `LIST` で返しても、

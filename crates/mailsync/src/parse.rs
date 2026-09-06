@@ -116,10 +116,10 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Parsed> {
     };
     let body_text = strip_quotes_and_signature(&body_text_raw);
 
-    let attachments: Vec<AttachmentMeta> = msg
-        .attachments()
-        .filter_map(|part| {
-            let filename = part.attachment_name()?.to_string();
+    let attachments: Vec<AttachmentMeta> = attachment_parts(&msg)
+        .into_iter()
+        .map(|part| {
+            let filename = part.attachment_name().unwrap_or_default().to_string();
             let mime = part
                 .content_type()
                 .map(|ct| match &ct.c_subtype {
@@ -128,11 +128,11 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Parsed> {
                 })
                 .unwrap_or_else(|| "application/octet-stream".to_string());
             let size = part.contents().len();
-            Some(AttachmentMeta {
+            AttachmentMeta {
                 filename,
                 mime,
                 size,
-            })
+            }
         })
         .collect();
     let has_attachments = !attachments.is_empty();
@@ -151,6 +151,30 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Parsed> {
         attachments,
         has_attachments,
     })
+}
+
+/// `parse()` の `attachments` 一覧と `attachment_bytes` の index がずれないよう、
+/// 「添付として数える」条件（`attachment_name()` が `Some`）をここに一本化する。
+fn attachment_parts<'a>(
+    msg: &'a mail_parser::Message<'a>,
+) -> Vec<&'a mail_parser::MessagePart<'a>> {
+    msg.attachments()
+        .filter(|part| part.attachment_name().is_some())
+        .collect()
+}
+
+/// raw .eml から `index` 番目の添付の中身を取り出す。
+/// `index` は `parse()` が返す `Parsed.attachments` の並びと同じ。
+/// 範囲外なら `Err`。
+pub fn attachment_bytes(raw: &[u8], index: usize) -> anyhow::Result<Vec<u8>> {
+    let msg = MessageParser::default()
+        .parse(raw)
+        .ok_or_else(|| anyhow::anyhow!("failed to parse RFC822 message"))?;
+
+    attachment_parts(&msg)
+        .get(index)
+        .map(|part| part.contents().to_vec())
+        .ok_or_else(|| anyhow::anyhow!("attachment index {index} out of range"))
 }
 
 /// 簡易 HTML → テキスト変換。`text/plain` パートが無いときだけ使う。
@@ -264,23 +288,62 @@ fn is_signature_marker(line: &str) -> bool {
     line.trim_end() == "--"
 }
 
+/// 本文を「要約向けの本体」と「落とした引用・署名」に分けた結果。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BodySplit {
+    /// 引用・署名を落とした要約向けテキスト。
+    pub body: String,
+    /// 落とした行をそのまま連結したもの。UI の「引用 N 行を表示」で使う。
+    pub quoted: String,
+}
+
+/// 各行の前後にある空行（空白のみの行）だけを落として `\n` で連結する。
+/// 残った行はインデントも含めてそのまま保つ。
+fn join_trimming_blank_lines(lines: &[&str]) -> String {
+    let start = lines.iter().position(|l| !l.trim().is_empty());
+    let end = lines.iter().rposition(|l| !l.trim().is_empty());
+    match (start, end) {
+        (Some(s), Some(e)) => lines[s..=e].join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// 引用（`>` 行、"On ... wrote:"、"----- Original Message -----"、
+/// "----- 元のメッセージ -----" 以降）と署名（`--` 行以降）を本体から切り離す。
+/// 判定ルールは `strip_quotes_and_signature`（本関数の `body` を返すだけの
+/// 薄いラッパ）と同一。マーカー行に当たったら、その行自身を含めて以降すべてを
+/// `quoted` に入れる。
+pub fn split_quotes_and_signature(text: &str) -> BodySplit {
+    let mut body_lines: Vec<&str> = Vec::new();
+    let mut quoted_lines: Vec<&str> = Vec::new();
+    let mut in_quoted = false;
+
+    for line in text.lines() {
+        if !in_quoted
+            && (is_signature_marker(line)
+                || is_original_message_marker(line)
+                || is_reply_header_line(line))
+        {
+            in_quoted = true;
+        }
+
+        if in_quoted || is_quote_line(line) {
+            quoted_lines.push(line);
+        } else {
+            body_lines.push(line);
+        }
+    }
+
+    BodySplit {
+        body: body_lines.join("\n").trim().to_string(),
+        quoted: join_trimming_blank_lines(&quoted_lines),
+    }
+}
+
 /// 引用（`>` 行、"On ... wrote:"、"----- Original Message -----"、
 /// "----- 元のメッセージ -----" 以降）と署名（`--` 行以降）を落とす。
 pub fn strip_quotes_and_signature(text: &str) -> String {
-    let mut out_lines: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if is_signature_marker(line)
-            || is_original_message_marker(line)
-            || is_reply_header_line(line)
-        {
-            break;
-        }
-        if is_quote_line(line) {
-            continue;
-        }
-        out_lines.push(line);
-    }
-    out_lines.join("\n").trim().to_string()
+    split_quotes_and_signature(text).body
 }
 
 #[cfg(test)]
@@ -331,5 +394,47 @@ mod tests {
     fn strip_quotes_and_signature_drops_quote_lines() {
         let text = "返信です。\n> 元のメールの行\n  > インデントされた引用";
         assert_eq!(strip_quotes_and_signature(text), "返信です。");
+    }
+
+    #[test]
+    fn split_keeps_quoted_lines() {
+        let text = "返信です。\n> 元のメールの行\n  > インデントされた引用";
+        let split = split_quotes_and_signature(text);
+        assert_eq!(split.body, "返信です。");
+        assert_eq!(split.quoted, "> 元のメールの行\n  > インデントされた引用");
+    }
+
+    #[test]
+    fn split_keeps_everything_after_the_original_message_marker() {
+        let text = "承知しました。\n-----Original Message-----\nFrom: someone\n本文";
+        let split = split_quotes_and_signature(text);
+        assert_eq!(split.body, "承知しました。");
+        assert_eq!(
+            split.quoted,
+            "-----Original Message-----\nFrom: someone\n本文"
+        );
+    }
+
+    #[test]
+    fn split_keeps_the_signature() {
+        let text = "本文です。\n-- \n田中 太郎";
+        let split = split_quotes_and_signature(text);
+        assert_eq!(split.body, "本文です。");
+        assert_eq!(split.quoted, "-- \n田中 太郎");
+    }
+
+    #[test]
+    fn split_quoted_line_count_matches() {
+        let text = "返信です。\n> 一行目\n> 二行目\n> 三行目";
+        let split = split_quotes_and_signature(text);
+        assert_eq!(split.quoted.lines().count(), 3);
+    }
+
+    #[test]
+    fn split_without_quotes_returns_empty_quoted() {
+        let text = "普通の本文です。\n二行目です。";
+        let split = split_quotes_and_signature(text);
+        assert_eq!(split.body, text);
+        assert_eq!(split.quoted, "");
     }
 }
