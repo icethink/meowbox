@@ -9,7 +9,9 @@ export function ExtractedTasks({ tasks }: { tasks: Task[] }) {
   const decide = useAppStore((s) => s.decideTask);
 
   const visible = tasks.filter((t) => decisions[t.id] !== 'dismissed');
-  if (visible.length === 0) return null;
+  // 全部 dismiss された結果 0 件になった場合は、空状態を出さずに何も表示しない
+  // （「消したのにまた出てきた」ように見えるのを避ける）
+  if (tasks.length > 0 && visible.length === 0) return null;
 
   return (
     <section className="flex flex-col gap-[6px]">
@@ -17,6 +19,11 @@ export function ExtractedTasks({ tasks }: { tasks: Task[] }) {
         <SquareCheck size={11} strokeWidth={2} className="text-ai" aria-hidden="true" />
         AI 抽出タスク
       </h3>
+      {tasks.length === 0 && (
+        <p className="rounded-token border border-dashed border-ai-line px-[10px] py-[7px] text-xs text-faint">
+          タスクはまだ抽出されていません
+        </p>
+      )}
       {visible.map((task) => {
         const decision = decisions[task.id];
         // 人間が「確定」を押したものは、確度が低くても確定行として扱う
