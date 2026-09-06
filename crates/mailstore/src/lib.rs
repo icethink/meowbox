@@ -59,7 +59,19 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        let from = current.as_deref().and_then(|v| v.parse::<i64>().ok());
+        let parsed = current.as_deref().and_then(|v| v.parse::<i64>().ok());
+
+        // schema_version の行が無い、もしくは数値としてパースできない場合でも、
+        // messages テーブルが既にあれば実体のある DB とみなす。v1 が唯一の
+        // 既存バージョンなので from = 1 とする。messages も無ければ本当に
+        // 新規の DB で、この場合だけ upgrade を呼ばない。
+        // 将来 v3 を足すときも、ここで from を決めてから upgrade(from) が
+        // 段階的に走る形は変わらない。
+        let from = match parsed {
+            Some(v) => Some(v),
+            None if self.table_exists("messages")? => Some(1),
+            None => None,
+        };
 
         self.conn
             .execute_batch(SCHEMA_SQL)
@@ -100,6 +112,19 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// 指定した名前のテーブルが存在するか。
+    fn table_exists(&self, name: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![name],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
     }
 
     pub fn conn(&self) -> &Connection {
@@ -1232,7 +1257,16 @@ mod tests {
             &store, account_id, folder_id, 4, "t1", "同着2", None, t_same, false, false, false,
         );
         insert_msg(
-            &store, account_id, folder_id, 5, "t2", "別スレッド", None, Utc::now(), false, false,
+            &store,
+            account_id,
+            folder_id,
+            5,
+            "t2",
+            "別スレッド",
+            None,
+            Utc::now(),
+            false,
+            false,
             false,
         );
 
@@ -1261,20 +1295,59 @@ mod tests {
 
         // アカウント A: 未読1、既読1、未読だがアーカイブ済み1。
         insert_msg(
-            &store, account_a, folder_a, 1, "a1", "未読", None, Utc::now(), false, false, false,
+            &store,
+            account_a,
+            folder_a,
+            1,
+            "a1",
+            "未読",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
         );
         insert_msg(
-            &store, account_a, folder_a, 2, "a2", "既読", None, Utc::now(), true, false, false,
+            &store,
+            account_a,
+            folder_a,
+            2,
+            "a2",
+            "既読",
+            None,
+            Utc::now(),
+            true,
+            false,
+            false,
         );
         let archived_id = insert_msg(
-            &store, account_a, folder_a, 3, "a3", "未読アーカイブ済み", None, Utc::now(), false,
-            false, false,
+            &store,
+            account_a,
+            folder_a,
+            3,
+            "a3",
+            "未読アーカイブ済み",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
         );
         store.set_archived(&[archived_id], true).unwrap();
 
         // アカウント B: 全て既読なので未読数 0。結果に出てこないはず。
         insert_msg(
-            &store, acc_b.id, folder_b, 1, "b1", "既読B", None, Utc::now(), true, false, false,
+            &store,
+            acc_b.id,
+            folder_b,
+            1,
+            "b1",
+            "既読B",
+            None,
+            Utc::now(),
+            true,
+            false,
+            false,
         );
 
         let counts = store.unread_counts_by_account().unwrap();
@@ -1362,6 +1435,99 @@ mod tests {
         let threads = store.list_threads(&ThreadQuery::default()).unwrap();
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].thread_key, "legacy-thread");
+
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn migrates_a_database_whose_version_row_is_missing() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "meowbox_missing_version_migration_test_{}_{}.sqlite",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            // meta テーブル自体を作らない = schema_version の行が無い状態。
+            conn.execute_batch(
+                "CREATE TABLE accounts (
+                     id            INTEGER PRIMARY KEY,
+                     name          TEXT NOT NULL,
+                     kind          TEXT NOT NULL,
+                     email         TEXT NOT NULL UNIQUE,
+                     project_tag   TEXT,
+                     settings_json TEXT NOT NULL DEFAULT '{}',
+                     created_at    TEXT NOT NULL
+                 );
+                 CREATE TABLE folders (
+                     id           INTEGER PRIMARY KEY,
+                     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     path         TEXT NOT NULL,
+                     role         TEXT NOT NULL DEFAULT 'other',
+                     uidvalidity  INTEGER,
+                     last_uid     INTEGER NOT NULL DEFAULT 0,
+                     UNIQUE (account_id, path)
+                 );
+                 CREATE TABLE messages (
+                     id              INTEGER PRIMARY KEY,
+                     account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     folder_id       INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     uid             INTEGER NOT NULL,
+                     message_id      TEXT,
+                     thread_key      TEXT NOT NULL,
+                     from_addr       TEXT NOT NULL,
+                     from_name       TEXT,
+                     to_json         TEXT NOT NULL DEFAULT '[]',
+                     cc_json         TEXT NOT NULL DEFAULT '[]',
+                     subject         TEXT NOT NULL DEFAULT '',
+                     date            TEXT NOT NULL,
+                     snippet         TEXT NOT NULL DEFAULT '',
+                     body_text       TEXT NOT NULL DEFAULT '',
+                     body_html       TEXT,
+                     has_attachments INTEGER NOT NULL DEFAULT 0,
+                     is_read         INTEGER NOT NULL DEFAULT 0,
+                     is_flagged      INTEGER NOT NULL DEFAULT 0,
+                     raw_path        TEXT,
+                     UNIQUE (folder_id, uid)
+                 );
+                 INSERT INTO accounts(id, name, kind, email, project_tag, settings_json, created_at)
+                 VALUES (1, 'legacy', 'imap', 'legacy-no-version@example.com', NULL, '{}', '2024-01-01T00:00:00Z');
+                 INSERT INTO folders(id, account_id, path, role) VALUES (1, 1, 'INBOX', 'inbox');
+                 INSERT INTO messages(id, account_id, folder_id, uid, thread_key, from_addr, subject, date)
+                 VALUES (1, 1, 1, 1, 'legacy-thread-no-version', 'a@example.com', 'legacy subject', '2024-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let has_column = store
+            .conn()
+            .prepare("PRAGMA table_info(messages)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .iter()
+            .any(|n| n == "is_archived");
+        assert!(has_column);
+
+        let version: String = store
+            .conn()
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "2");
 
         drop(store);
         let _ = std::fs::remove_file(&path);
