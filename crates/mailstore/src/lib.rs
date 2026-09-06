@@ -650,6 +650,8 @@ impl Store {
     // ---- ai summaries -----------------------------------------------------
 
     /// Claude が作った要約を保存する。同じ target に複数入りうる（最新を使う）。
+    /// `model` は必須。UI が「Claude による要約 · <model> · <時刻>」と出すため
+    /// 空文字列を渡さないこと。
     pub fn save_summary(&self, target: &str, model: &str, summary: &str) -> Result<i64> {
         let now = Utc::now();
         self.conn.execute(
@@ -694,6 +696,42 @@ impl Store {
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// タスクを作るか、既にあれば更新する。
+    /// 同一性の判定は `source_message_id` と `title` の組。
+    /// `source_message_id` が `None` のものは常に新規作成する
+    /// （どのメールから来たか分からないものは同一視できないため）。
+    /// 戻り値は `(id, inserted)`。`inserted` が false なら更新だった。
+    pub fn upsert_task(&self, t: &NewTask<'_>) -> Result<(i64, bool)> {
+        let Some(source_message_id) = t.source_message_id else {
+            return Ok((self.insert_task(t)?, true));
+        };
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM tasks WHERE source_message_id = ?1 AND title = ?2",
+                params![source_message_id, t.title],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match existing {
+            Some(id) => {
+                // status は更新しない。人間が done / dismissed にしたタスクを
+                // Claude が呼び直したときに open へ引き戻してしまわないため。
+                self.conn.execute(
+                    "UPDATE tasks SET due = ?2, confidence = ?3, created_by = ?4 WHERE id = ?1",
+                    params![
+                        id,
+                        t.due.map(|d| d.to_rfc3339()),
+                        t.confidence as f64,
+                        t.created_by,
+                    ],
+                )?;
+                Ok((id, false))
+            }
+            None => Ok((self.insert_task(t)?, true)),
+        }
     }
 
     /// タスク一覧。期限が近い順（due が NULL のものは最後）、同じなら id 昇順。
@@ -2682,5 +2720,184 @@ mod tests {
             .set_meta(&synced_at_key(account_id), "not a date")
             .unwrap();
         assert_eq!(store.account_synced_at(account_id).unwrap(), None);
+    }
+
+    #[test]
+    fn upsert_task_inserts_then_updates() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        let soon = Utc::now();
+        let later = Utc::now() + chrono::Duration::days(1);
+
+        let (id_first, inserted_first) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: Some(soon),
+                confidence: 0.5,
+                created_by: "ai",
+            })
+            .unwrap();
+        assert!(inserted_first);
+
+        let (id_second, inserted_second) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: Some(later),
+                confidence: 0.9,
+                created_by: "ai",
+            })
+            .unwrap();
+        assert!(!inserted_second);
+        assert_eq!(id_first, id_second);
+
+        let tasks = store.tasks_for_message(msg).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].due.unwrap().to_rfc3339(), later.to_rfc3339());
+        assert_eq!(tasks[0].confidence, 0.9);
+    }
+
+    #[test]
+    fn upsert_task_does_not_reopen_a_done_task() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let (id, _) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: None,
+                confidence: 0.5,
+                created_by: "ai",
+            })
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE tasks SET status = 'done' WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+
+        store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: Some(Utc::now()),
+                confidence: 0.9,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        let tasks = store.tasks_for_message(msg).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].status, mailcore::TaskStatus::Done);
+    }
+
+    #[test]
+    fn upsert_task_without_source_message_always_inserts() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+
+        let (id_first, inserted_first) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "手動タスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        let (id_second, inserted_second) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "手動タスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+
+        assert!(inserted_first);
+        assert!(inserted_second);
+        assert_ne!(id_first, id_second);
+    }
+
+    #[test]
+    fn upsert_task_distinguishes_titles() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let (id_a, inserted_a) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        let (id_b, inserted_b) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "契約書を確認する",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        assert!(inserted_a);
+        assert!(inserted_b);
+        assert_ne!(id_a, id_b);
+        assert_eq!(store.tasks_for_message(msg).unwrap().len(), 2);
     }
 }
