@@ -2818,6 +2818,21 @@ mod tests {
         assert_eq!(store.account_synced_at(account_id).unwrap(), None);
     }
 
+    /// `set_account_synced_at` が書く meta キーの文字列を固定する。
+    /// このキー形式は meowbox 本体だけでなく、別プロセスの MCP サーバ
+    /// （mailmcp）も直接 `get_meta("sync:<id>:finished_at")` で読むので、
+    /// うっかり変えないこと。
+    #[test]
+    fn set_account_synced_at_uses_the_key_shape_the_mcp_server_reads() {
+        let store = Store::open_in_memory().unwrap();
+        let now = Utc::now();
+
+        store.set_account_synced_at(42, now).unwrap();
+
+        let raw = store.get_meta("sync:42:finished_at").unwrap().unwrap();
+        assert_eq!(raw, now.to_rfc3339());
+    }
+
     #[test]
     fn upsert_task_inserts_then_updates() {
         let store = Store::open_in_memory().unwrap();
