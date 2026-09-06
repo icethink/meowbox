@@ -419,17 +419,17 @@ impl Store {
             format!("AND {}", m_where.join(" AND "))
         };
 
-        let mut having: Vec<&str> = Vec::new();
+        let mut thread_filters: Vec<&str> = Vec::new();
         if q.unread_only {
-            having.push("g.unread_count > 0");
+            thread_filters.push("g.unread_count > 0");
         }
         if q.flagged_only {
-            having.push("g.is_flagged = 1");
+            thread_filters.push("g.is_flagged = 1");
         }
-        let having_sql = if having.is_empty() {
+        let thread_filters_sql = if thread_filters.is_empty() {
             String::new()
         } else {
-            format!("AND {}", having.join(" AND "))
+            format!("AND {}", thread_filters.join(" AND "))
         };
 
         let sql = format!(
@@ -456,7 +456,7 @@ impl Store {
              FROM latest l
              JOIN agg g ON g.thread_key = l.thread_key
              JOIN accounts acc ON acc.id = l.account_id
-             WHERE l.rn = 1 {having_sql}
+             WHERE l.rn = 1 {thread_filters_sql}
              ORDER BY l.date DESC, l.id DESC
              LIMIT ? OFFSET ?"
         );
