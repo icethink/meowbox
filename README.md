@@ -66,6 +66,8 @@ cargo build --workspace
 cargo test --workspace
 
 # デバッグ用 CLI
+# DB と .eml の置き場は OS のアプリデータディレクトリ配下（Windows なら
+# %APPDATA%\dev.icethink.meowbox\）。開発中は MEOWBOX_DATA_DIR で上書きできる
 cargo run -p mailcli -- init
 cargo run -p mailcli -- accounts add --name work --email you@example.com \
     --project 案件A --host imap.example.com --username you@example.com

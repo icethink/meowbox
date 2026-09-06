@@ -9,7 +9,9 @@
 //!   meowbox search "見積" --project 案件A --unread
 //!   meowbox show 42
 //!
-//! DB の場所は `--db` か `MEOWBOX_DB`、既定は `./data/meowbox.db`。
+//! データの置き場（DB・raw .eml・添付）は `--data-dir` か `MEOWBOX_DATA_DIR`、
+//! 既定は OS のアプリデータディレクトリ配下。DB のパスだけ変えたいときは
+//! `--db` か `MEOWBOX_DB` で上書きできる。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,9 +31,12 @@ use mailsync::imap::{save_password, ImapBackend, ImapConfig};
     about = "Meowbox — AI-friendly mail aggregator"
 )]
 struct Cli {
-    /// SQLite DB のパス
-    #[arg(long, env = "MEOWBOX_DB", default_value = "data/meowbox.db")]
-    db: PathBuf,
+    /// データの置き場（DB・raw .eml・添付）。既定は OS のアプリデータディレクトリ配下
+    #[arg(long, env = "MEOWBOX_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+    /// SQLite DB のパス。既定は <data-dir>/meowbox.db
+    #[arg(long, env = "MEOWBOX_DB")]
+    db: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -218,14 +223,19 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if let Some(parent) = cli.db.parent() {
+    let data_dir = mailstore::paths::resolve_data_dir(cli.data_dir.clone())?;
+    let db = cli
+        .db
+        .clone()
+        .unwrap_or_else(|| mailstore::paths::db_path(&data_dir));
+    if let Some(parent) = db.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let store = Store::open(&cli.db).with_context(|| format!("open {}", cli.db.display()))?;
+    let store = Store::open(&db).with_context(|| format!("open {}", db.display()))?;
 
     match cli.cmd {
         Cmd::Init => {
-            println!("initialized {}", cli.db.display());
+            println!("initialized {}", db.display());
         }
         Cmd::Accounts { cmd } => match cmd {
             AccountsCmd::List => {
@@ -318,7 +328,7 @@ async fn main() -> Result<()> {
                 let opts = SyncOptions {
                     only_folder: folder.clone(),
                     since: Some(since),
-                    data_dir: PathBuf::from("data/mail"),
+                    data_dir: mailstore::paths::mail_dir(&data_dir),
                 };
 
                 outcome.attempted += 1;

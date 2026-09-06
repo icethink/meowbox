@@ -7,6 +7,8 @@
 //!   Claude がファイルとして読める保険。
 //! - 全文検索は FTS5 trigram。日本語の部分一致が効く。
 
+pub mod paths;
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
