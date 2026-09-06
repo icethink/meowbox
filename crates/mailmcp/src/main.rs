@@ -17,8 +17,11 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use mailcore::Address;
-use mailmcp::{GetMessageArgs, GetThreadArgs, SearchMessagesArgs};
-use mailstore::{AttachmentRow, SearchQuery, Store, SummaryRow};
+use mailmcp::{
+    CreateDraftArgs, GetMessageArgs, GetThreadArgs, InboxDigestArgs, ListTasksArgs,
+    SaveSummaryArgs, SearchMessagesArgs, UpsertTasksArgs,
+};
+use mailstore::{AttachmentRow, NewDraft, NewTask, SearchQuery, Store, SummaryRow, TaskQuery, ThreadQuery};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt};
@@ -211,6 +214,63 @@ struct ThreadOut {
     tasks: Vec<TaskOut>,
 }
 
+/// `inbox_digest` の 1 スレッド。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct DigestThreadOut {
+    thread_key: String,
+    subject: String,
+    from: AddressOut,
+    /// RFC 3339
+    last_date: String,
+    message_count: i64,
+    unread_count: i64,
+    snippet: String,
+    has_attachments: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<SummaryOut>,
+    tasks: Vec<TaskOut>,
+}
+
+/// `inbox_digest` の 1 グループ（案件単位）。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct DigestGroupOut {
+    /// project_tag。未設定のアカウントのスレッドは最後のグループにまとめる。
+    project_tag: Option<String>,
+    threads: Vec<DigestThreadOut>,
+}
+
+/// `inbox_digest` の返り値。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct InboxDigestOut {
+    /// この時刻以降に更新されたスレッドだけを含む。RFC 3339。
+    /// 省略時は「直近 24 時間」（サーバは「今日」を知らないための方針）。
+    since: String,
+    groups: Vec<DigestGroupOut>,
+    /// スレッド数の上限（50）で切ったら true。
+    truncated: bool,
+}
+
+/// `save_summary` の返り値。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct SaveSummaryOut {
+    id: i64,
+    /// RFC 3339
+    created_at: String,
+}
+
+/// `upsert_tasks` の返り値。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct UpsertTasksOut {
+    inserted: i64,
+    updated: i64,
+}
+
+/// `create_draft` の返り値。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct CreateDraftOut {
+    id: i64,
+}
+
 /// すべてのツール description に必ず入れる、送信・既読変更をしないことの明記。
 /// Claude が「このツールで送信できる／既読にできる」と誤解しないようにするための文言。
 const SAFETY_NOTE_JA: &str = "送信はできません。既読状態は変更されません。";
@@ -336,6 +396,87 @@ impl MeowboxMcp {
     ) -> Result<Json<MessageOut>, String> {
         let store = self.lock_store()?;
         get_message_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "未処理（未読）メールをスレッド単位でまとめたダイジェストを返す。\
+        since を省略すると直近 24 時間になる（サーバは「今日」を知らないため）。\
+        スレッド数は最大 50 件で、それ以上は truncated=true で切る。\
+        送信はできません。既読状態は変更されません。\n\
+        Returns unread mail grouped by thread as a digest. If since is omitted, the last \
+        24 hours are used (the server has no notion of \"today\"). At most 50 threads are \
+        returned; beyond that, truncated=true. This server cannot send mail and never \
+        changes read state."
+    )]
+    async fn inbox_digest(
+        &self,
+        Parameters(args): Parameters<InboxDigestArgs>,
+    ) -> Result<Json<InboxDigestOut>, String> {
+        let store = self.lock_store()?;
+        inbox_digest_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "Claude が作った要約を保存する。target は thread:<key> / message:<id> / \
+        daily:<yyyy-mm-dd> のいずれかの形式にすること。model と summary は必須（空は不可）。\
+        送信はできません。既読状態は変更されません。\n\
+        Saves a Claude-generated summary. target must be thread:<key>, message:<id> or \
+        daily:<yyyy-mm-dd>. model and summary are required and must not be empty. \
+        This server cannot send mail and never changes read state."
+    )]
+    async fn save_summary(
+        &self,
+        Parameters(args): Parameters<SaveSummaryArgs>,
+    ) -> Result<Json<SaveSummaryOut>, String> {
+        let store = self.lock_store()?;
+        save_summary_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "タスク抽出結果をまとめて保存する（既存があれば更新、無ければ新規作成）。\
+        created_by は常に \"ai\" になる。due を指定する場合は RFC3339 で、\
+        パースできなければそのタスクをエラーにする。送信はできません。既読状態は変更されません。\n\
+        Saves extracted tasks in bulk (insert or update). created_by is always \"ai\". \
+        due must be RFC3339 if given; an unparsable value fails that task. \
+        This server cannot send mail and never changes read state."
+    )]
+    async fn upsert_tasks(
+        &self,
+        Parameters(args): Parameters<UpsertTasksArgs>,
+    ) -> Result<Json<UpsertTasksOut>, String> {
+        let store = self.lock_store()?;
+        upsert_tasks_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "タスク一覧を返す。status（open/done/dismissed）や案件タグで絞り込める。\
+        送信はできません。既読状態は変更されません。\n\
+        Lists tasks, optionally filtered by status (open/done/dismissed) or project tag. \
+        This server cannot send mail and never changes read state."
+    )]
+    async fn list_tasks(
+        &self,
+        Parameters(args): Parameters<ListTasksArgs>,
+    ) -> Result<Json<Vec<TaskOut>>, String> {
+        let store = self.lock_store()?;
+        list_tasks_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "下書きを保存するだけで、送信はしません。送信は Meowbox の画面から人間が行います。\
+        in_reply_to があれば宛先・件名（Re: を二重に付けない）を補う。to / subject を指定すれば\
+        そちらを優先する。既読状態は変更されません。\n\
+        Saves a reply draft only; it never sends anything. Sending is done by a human from \
+        the Meowbox UI. If in_reply_to is given, the recipient and subject (without doubling \
+        \"Re:\") are inferred, unless to / subject are given explicitly. \
+        This server never changes read state."
+    )]
+    async fn create_draft(
+        &self,
+        Parameters(args): Parameters<CreateDraftArgs>,
+    ) -> Result<Json<CreateDraftOut>, String> {
+        let store = self.lock_store()?;
+        create_draft_impl(&store, &args).map(Json)
     }
 }
 
@@ -547,6 +688,251 @@ fn get_message_impl(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "メッセージが見つかりません".to_string())?;
     message_to_out(store, msg, true)
+}
+
+/// `inbox_digest` がスレッド数を切り上限とみなす件数。
+const INBOX_DIGEST_THREAD_LIMIT: usize = 50;
+
+/// `inbox_digest` の本体。
+fn inbox_digest_impl(
+    store: &Store,
+    args: &InboxDigestArgs,
+) -> std::result::Result<InboxDigestOut, String> {
+    // サーバは「今日」もタイムゾーンも知らないので、since 省略時は単純に
+    // 「直近 24 時間」を使う（「今日」の境界は UI 側の責務）。
+    let since = match &args.since {
+        Some(s) => parse_rfc3339(s)?,
+        None => Utc::now() - chrono::Duration::hours(24),
+    };
+
+    let query = ThreadQuery {
+        project_tag: args.project.as_deref(),
+        unread_only: true,
+        ..Default::default()
+    };
+    let threads = store.list_threads(&query).map_err(|e| e.to_string())?;
+
+    // list_threads は最終更新の日時降順で返すので、フィルタ後もその順のまま。
+    let filtered: Vec<_> = threads
+        .into_iter()
+        .filter(|t| t.last_date >= since)
+        .collect();
+    let truncated = filtered.len() > INBOX_DIGEST_THREAD_LIMIT;
+
+    let mut tagged: BTreeMap<String, Vec<DigestThreadOut>> = BTreeMap::new();
+    let mut untagged: Vec<DigestThreadOut> = Vec::new();
+    for t in filtered.into_iter().take(INBOX_DIGEST_THREAD_LIMIT) {
+        let project_tag = t.project_tag.clone();
+        let summary = store
+            .latest_summary(&format!("thread:{}", t.thread_key))
+            .map_err(|e| e.to_string())?
+            .map(SummaryOut::from);
+        let tasks = store
+            .tasks_for_thread(&t.thread_key)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(TaskOut::from)
+            .collect();
+
+        let out = DigestThreadOut {
+            thread_key: t.thread_key,
+            subject: t.subject,
+            from: t.from.into(),
+            last_date: t.last_date.to_rfc3339(),
+            message_count: t.message_count,
+            unread_count: t.unread_count,
+            snippet: t.snippet,
+            has_attachments: t.has_attachments,
+            summary,
+            tasks,
+        };
+        match project_tag {
+            Some(tag) => tagged.entry(tag).or_default().push(out),
+            None => untagged.push(out),
+        }
+    }
+
+    let mut groups: Vec<DigestGroupOut> = tagged
+        .into_iter()
+        .map(|(tag, threads)| DigestGroupOut {
+            project_tag: Some(tag),
+            threads,
+        })
+        .collect();
+    if !untagged.is_empty() {
+        groups.push(DigestGroupOut {
+            project_tag: None,
+            threads: untagged,
+        });
+    }
+
+    Ok(InboxDigestOut {
+        since: since.to_rfc3339(),
+        groups,
+        truncated,
+    })
+}
+
+/// `save_summary` の本体。`target` の形式・`model` / `summary` の非空をここで確かめる。
+fn save_summary_impl(
+    store: &Store,
+    args: &SaveSummaryArgs,
+) -> std::result::Result<SaveSummaryOut, String> {
+    if !(args.target.starts_with("thread:")
+        || args.target.starts_with("message:")
+        || args.target.starts_with("daily:"))
+    {
+        return Err(format!(
+            "target の形式が不正です（thread:<key> / message:<id> / daily:<yyyy-mm-dd> の\
+             いずれかで始めてください）: {}",
+            args.target
+        ));
+    }
+    if args.model.is_empty() {
+        return Err("model を指定してください".to_string());
+    }
+    if args.summary.trim().is_empty() {
+        return Err("summary が空です".to_string());
+    }
+
+    let id = store
+        .save_summary(&args.target, &args.model, &args.summary)
+        .map_err(|e| e.to_string())?;
+    let created_at = store
+        .latest_summary(&args.target)
+        .map_err(|e| e.to_string())?
+        .map(|r| r.created_at.to_rfc3339())
+        .ok_or_else(|| "保存した要約の取得に失敗しました".to_string())?;
+
+    Ok(SaveSummaryOut { id, created_at })
+}
+
+/// `upsert_tasks` の本体。`due` がパースできないタスクはそこでエラーにする
+/// （黙って期限を落とすと Claude も人間も気づけないため）。
+fn upsert_tasks_impl(
+    store: &Store,
+    args: &UpsertTasksArgs,
+) -> std::result::Result<UpsertTasksOut, String> {
+    if args.tasks.is_empty() {
+        return Err("tasks が空です".to_string());
+    }
+
+    let mut inserted = 0i64;
+    let mut updated = 0i64;
+    for (i, t) in args.tasks.iter().enumerate() {
+        let due = match &t.due {
+            Some(s) => Some(
+                parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?,
+            ),
+            None => None,
+        };
+        let new_task = NewTask {
+            account_id: t.account_id,
+            source_message_id: t.source_message_id,
+            title: &t.title,
+            due,
+            confidence: t.confidence,
+            // created_by は MCP 経由 = Claude が作ったものなので常に "ai"。
+            created_by: "ai",
+        };
+        let (_, was_inserted) = store.upsert_task(&new_task).map_err(|e| e.to_string())?;
+        if was_inserted {
+            inserted += 1;
+        } else {
+            updated += 1;
+        }
+    }
+
+    Ok(UpsertTasksOut { inserted, updated })
+}
+
+/// `list_tasks` の本体。
+fn list_tasks_impl(
+    store: &Store,
+    args: &ListTasksArgs,
+) -> std::result::Result<Vec<TaskOut>, String> {
+    let status = args.status.as_deref().map(parse_task_status).transpose()?;
+    let query = TaskQuery {
+        status,
+        project_tag: args.project.as_deref(),
+        due_before: None,
+        limit: 0,
+    };
+    let tasks = store.list_tasks(&query).map_err(|e| e.to_string())?;
+    Ok(tasks.into_iter().map(TaskOut::from).collect())
+}
+
+/// `create_draft` の宛先・件名を決める。`to` / `subject` が明示されていればそちらを
+/// 優先し、無ければ `in_reply_to` のメッセージから補う。
+fn resolve_draft_to_and_subject(
+    store: &Store,
+    args: &CreateDraftArgs,
+) -> std::result::Result<(Vec<Address>, String), String> {
+    let need_original = args.to.is_none() || args.subject.is_none();
+    let original = if need_original {
+        match args.in_reply_to {
+            Some(id) => Some(
+                store
+                    .get_message(id)
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "in_reply_to のメッセージが見つかりません".to_string())?,
+            ),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    let to = match &args.to {
+        Some(addrs) => addrs
+            .iter()
+            .map(|email| Address {
+                name: None,
+                email: email.clone(),
+            })
+            .collect(),
+        None => match &original {
+            Some(msg) => vec![msg.from.clone()],
+            None => {
+                return Err(
+                    "宛先を決められません（to か in_reply_to を指定してください）".to_string(),
+                )
+            }
+        },
+    };
+
+    let subject = match &args.subject {
+        Some(s) => s.clone(),
+        None => match &original {
+            // 既存の Re: / Re[2]: などのプレフィックスを剥がしてから 1 回だけ付け直す。
+            Some(msg) => format!("Re: {}", mailcore::normalize_subject(&msg.subject)),
+            None => String::new(),
+        },
+    };
+
+    Ok((to, subject))
+}
+
+/// `create_draft` の本体。status は必ず 'draft'（`Store::insert_draft` が固定している）。
+fn create_draft_impl(
+    store: &Store,
+    args: &CreateDraftArgs,
+) -> std::result::Result<CreateDraftOut, String> {
+    if args.body.trim().is_empty() {
+        return Err("body が空です".to_string());
+    }
+
+    let (to, subject) = resolve_draft_to_and_subject(store, args)?;
+
+    let new_draft = NewDraft {
+        account_id: args.account_id,
+        in_reply_to: args.in_reply_to,
+        to: &to,
+        subject: &subject,
+        body: &args.body,
+    };
+    let id = store.insert_draft(&new_draft).map_err(|e| e.to_string())?;
+    Ok(CreateDraftOut { id })
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -991,5 +1377,282 @@ mod tests {
         );
         assert_eq!(out.attachments.len(), 1);
         assert_eq!(out.attachments[0].filename, "note.txt");
+    }
+
+    #[test]
+    fn inbox_digest_impl_defaults_since_to_24_hours_ago() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let now = chrono::Utc::now();
+        insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-old",
+            "25 時間前",
+            now - chrono::Duration::hours(25),
+            None,
+        );
+        insert_msg(
+            &store,
+            account,
+            folder,
+            2,
+            "thread-new",
+            "1 時間前",
+            now - chrono::Duration::hours(1),
+            None,
+        );
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: None,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let keys: Vec<&str> = out
+            .groups
+            .iter()
+            .flat_map(|g| g.threads.iter().map(|t| t.thread_key.as_str()))
+            .collect();
+        assert_eq!(keys, vec!["thread-new"]);
+    }
+
+    #[test]
+    fn inbox_digest_impl_drops_threads_older_than_since() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let now = chrono::Utc::now();
+        insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-old",
+            "3 時間前",
+            now - chrono::Duration::hours(3),
+            None,
+        );
+        insert_msg(
+            &store,
+            account,
+            folder,
+            2,
+            "thread-new",
+            "30 分前",
+            now - chrono::Duration::minutes(30),
+            None,
+        );
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: Some((now - chrono::Duration::hours(2)).to_rfc3339()),
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let keys: Vec<&str> = out
+            .groups
+            .iter()
+            .flat_map(|g| g.threads.iter().map(|t| t.thread_key.as_str()))
+            .collect();
+        assert_eq!(keys, vec!["thread-new"]);
+    }
+
+    #[test]
+    fn inbox_digest_impl_truncates_at_50_threads() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let now = chrono::Utc::now();
+        for i in 0..51 {
+            insert_msg(
+                &store,
+                account,
+                folder,
+                i + 1,
+                &format!("thread-{i}"),
+                "件名",
+                now - chrono::Duration::minutes(i as i64),
+                None,
+            );
+        }
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: None,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let count: usize = out.groups.iter().map(|g| g.threads.len()).sum();
+        assert_eq!(count, 50);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn save_summary_impl_rejects_bad_target() {
+        let store = Store::open_in_memory().unwrap();
+        let args = SaveSummaryArgs {
+            target: "weird:1".to_string(),
+            model: "claude".to_string(),
+            summary: "要約".to_string(),
+        };
+        assert!(save_summary_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn save_summary_impl_rejects_empty_model() {
+        let store = Store::open_in_memory().unwrap();
+        let args = SaveSummaryArgs {
+            target: "thread:t1".to_string(),
+            model: "".to_string(),
+            summary: "要約".to_string(),
+        };
+        assert!(save_summary_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn save_summary_impl_rejects_blank_summary() {
+        let store = Store::open_in_memory().unwrap();
+        let args = SaveSummaryArgs {
+            target: "thread:t1".to_string(),
+            model: "claude".to_string(),
+            summary: "   ".to_string(),
+        };
+        assert!(save_summary_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn save_summary_impl_saves_a_valid_summary() {
+        let store = Store::open_in_memory().unwrap();
+        let args = SaveSummaryArgs {
+            target: "thread:t1".to_string(),
+            model: "claude".to_string(),
+            summary: "要約".to_string(),
+        };
+        let out = save_summary_impl(&store, &args).unwrap();
+        assert!(out.id > 0);
+        assert!(!out.created_at.is_empty());
+    }
+
+    #[test]
+    fn upsert_tasks_impl_rejects_empty_list() {
+        let store = Store::open_in_memory().unwrap();
+        let args = UpsertTasksArgs { tasks: vec![] };
+        assert!(upsert_tasks_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn upsert_tasks_impl_rejects_bad_due() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let args = UpsertTasksArgs {
+            tasks: vec![mailmcp::TaskInput {
+                account_id: account,
+                source_message_id: None,
+                title: "見積の確認".to_string(),
+                due: Some("not-a-date".to_string()),
+                confidence: 0.8,
+            }],
+        };
+        assert!(upsert_tasks_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn upsert_tasks_impl_counts_insert_then_update() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            chrono::Utc::now(),
+            None,
+        );
+
+        let task_input = || mailmcp::TaskInput {
+            account_id: account,
+            source_message_id: Some(msg_id),
+            title: "見積の確認".to_string(),
+            due: None,
+            confidence: 0.8,
+        };
+
+        let args = UpsertTasksArgs {
+            tasks: vec![task_input()],
+        };
+        let first = upsert_tasks_impl(&store, &args).unwrap();
+        assert_eq!((first.inserted, first.updated), (1, 0));
+
+        let second = upsert_tasks_impl(&store, &args).unwrap();
+        assert_eq!((second.inserted, second.updated), (0, 1));
+
+        let saved = store
+            .list_tasks(&mailstore::TaskQuery::default())
+            .unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].created_by, "ai");
+    }
+
+    #[test]
+    fn create_draft_impl_rejects_blank_body() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: None,
+            to: Some(vec!["client@client.example".to_string()]),
+            subject: Some("件名".to_string()),
+            body: "   ".to_string(),
+        };
+        assert!(create_draft_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn create_draft_impl_requires_a_recipient() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: None,
+            to: None,
+            subject: None,
+            body: "本文です。".to_string(),
+        };
+        assert!(create_draft_impl(&store, &args).is_err());
+    }
+
+    #[test]
+    fn create_draft_impl_does_not_double_up_re_prefix() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "Re: 見積の件",
+            chrono::Utc::now(),
+            None,
+        );
+
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: Some(msg_id),
+            to: None,
+            subject: None,
+            body: "承知しました。".to_string(),
+        };
+        let out = create_draft_impl(&store, &args).unwrap();
+
+        let draft = store.get_draft(out.id).unwrap().unwrap();
+        assert_eq!(draft.subject, "Re: 見積の件");
+        assert_eq!(draft.status, "draft");
+        assert_eq!(draft.to[0].email, "sender@mail.example");
     }
 }
