@@ -38,6 +38,9 @@ cd apps/desktop && pnpm lint
 cd apps/desktop && pnpm typecheck
 cd apps/desktop && pnpm build
 ```
+`src-tauri` を含む cargo コマンド（`cargo clippy --workspace` / `cargo test --workspace` など）の前には
+`pnpm mcp:build && pnpm mcp:sidecar` が要る。externalBin の実体が無いと build.rs が落ちるため。
+
 テストは `cargo test` が全部通る状態を維持する。新しい機能は必ず最低 1 本テストを付ける。
 
 ## 守ること

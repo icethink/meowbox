@@ -3,7 +3,7 @@
 // `cargo build` は `meowbox-mcp(.exe)` を吐くだけなので、tauri build の前に
 // `meowbox-mcp-<triple>(.exe)` にリネームしてコピーする必要がある。
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { existsSync, mkdirSync, copyFileSync, chmodSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,4 +45,11 @@ if (!existsSync(destDir)) {
 const destPath = join(destDir, `meowbox-mcp-${triple}${exeSuffix}`);
 
 copyFileSync(sourcePath, destPath);
+// copyFileSync はプラットフォームの copyfile 実装次第でコピー元のパーミッション
+// を引き継がないことがある（例: Linux で umask により実行ビットが落ちる）。
+// Windows には実行ビットの概念が無いため、非 Windows のときだけ明示的に
+// 実行可能にしておく。
+if (process.platform !== 'win32') {
+  chmodSync(destPath, 0o755);
+}
 console.log(`copied ${relative(repoRoot, sourcePath)} -> ${relative(repoRoot, destPath)}`);

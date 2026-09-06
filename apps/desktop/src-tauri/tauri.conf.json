@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "dev.icethink.meowbox",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm mcp:build && pnpm mcp:sidecar && pnpm dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build && pnpm mcp:build && pnpm mcp:sidecar",
     "frontendDist": "../dist"
