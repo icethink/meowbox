@@ -59,7 +59,7 @@ pub struct SyncOptions {
     pub only_folder: Option<String>,
     /// この日時以降のメールだけ取る。`None` なら日付で絞らない。
     pub since: Option<DateTime<Utc>>,
-    /// raw .eml の保存先ルート。既定は "data/mail"。
+    /// raw .eml の保存先ルート。既定は共有のデータディレクトリ配下の "mail"。
     pub data_dir: PathBuf,
     /// 進捗の通知先。`None` なら通知しない。
     ///
@@ -77,7 +77,11 @@ impl Default for SyncOptions {
         Self {
             only_folder: None,
             since: Some(Utc::now() - Duration::days(90)),
-            data_dir: PathBuf::from("data/mail"),
+            // 既定は共有のデータディレクトリ配下（<data_dir>/mail）。
+            // OS のアプリデータディレクトリを特定できない環境でだけ相対パスに落とす。
+            data_dir: mailstore::paths::default_data_dir()
+                .map(|d| mailstore::paths::mail_dir(&d))
+                .unwrap_or_else(|_| PathBuf::from("data/mail")),
             progress: None,
         }
     }
@@ -700,6 +704,55 @@ mod tests {
             }
         }
         assert!(found, "expected a .eml under {account_dir:?}");
+    }
+
+    /// `list_folders` が常に失敗するフェイクバックエンド。
+    struct FailingBackend;
+
+    #[async_trait::async_trait]
+    impl MailBackend for FailingBackend {
+        async fn list_folders(&self) -> Result<Vec<(String, FolderRole)>, BackendError> {
+            Err(BackendError::Protocol("list_folders failed".to_string()))
+        }
+
+        async fn folder_status(&self, _folder: &str) -> Result<FolderStatus, BackendError> {
+            unreachable!("list_folders fails first, folder_status must not be called")
+        }
+
+        async fn fetch_new(
+            &self,
+            _folder: &str,
+            _since_uid: u32,
+            _since: Option<DateTime<Utc>>,
+        ) -> Result<Vec<RawMessage>, BackendError> {
+            unreachable!("list_folders fails first, fetch_new must not be called")
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_emits_no_done_when_listing_folders_fails() {
+        let (store, account_id) = setup();
+        let engine = SyncEngine::new(store);
+        let backend = FailingBackend;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let events: Arc<Mutex<Vec<SyncProgress>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let opts = SyncOptions {
+            only_folder: None,
+            since: None,
+            data_dir: tmp.path().to_path_buf(),
+            progress: Some(Arc::new(move |p| sink_events.lock().unwrap().push(p))),
+        };
+
+        let result = engine.sync_once(account_id, &backend, &opts).await;
+        assert!(result.is_err());
+
+        let events = events.lock().unwrap();
+        assert!(
+            events.is_empty(),
+            "expected no progress events, got {events:?}"
+        );
+        assert_eq!(events.iter().filter(|e| e.done).count(), 0);
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
