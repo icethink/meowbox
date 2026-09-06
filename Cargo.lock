@@ -2570,12 +2570,17 @@ dependencies = [
 name = "meowbox-desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
  "mailcore",
  "mailstore",
+ "mailsync",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

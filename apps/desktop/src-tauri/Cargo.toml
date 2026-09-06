@@ -19,8 +19,13 @@ tauri-build.workspace = true
 tauri.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 # P3 で src/api/ のモックを invoke に差し替えるときにここから叩く。
-# 依存方向 core <- store を先に張っておき、逆流しないことを CI で担保する。
+# 依存方向 core <- store <- sync を先に張っておき、逆流しないことを CI で担保する。
 mailcore = { path = "../../../crates/mailcore" }
 mailstore = { path = "../../../crates/mailstore" }
+mailsync = { path = "../../../crates/mailsync" }
