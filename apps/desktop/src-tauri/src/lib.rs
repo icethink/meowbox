@@ -43,6 +43,13 @@ pub fn run() {
             commands::accounts::list_projects,
             commands::sync::sync_account,
             commands::sync::sync_status,
+            commands::threads::list_threads,
+            commands::threads::get_thread,
+            commands::threads::get_message,
+            commands::threads::extract_attachment,
+            commands::threads::get_digest,
+            commands::threads::mark,
+            commands::threads::view_counts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running meowbox");

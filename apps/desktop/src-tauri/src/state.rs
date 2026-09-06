@@ -58,7 +58,6 @@ impl AppState {
         paths::mail_dir(&self.data_dir)
     }
 
-    #[allow(dead_code)]
     pub fn attachments_dir(&self) -> PathBuf {
         paths::attachments_dir(&self.data_dir)
     }
