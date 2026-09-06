@@ -12,16 +12,19 @@
 //! **`mark`（既読・アーカイブ）と送信は MCP に出さない**（ADR 0002 / 0007）。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use mailcore::Address;
 use mailmcp::{
-    CreateDraftArgs, GetMessageArgs, GetThreadArgs, InboxDigestArgs, ListTasksArgs,
-    SaveSummaryArgs, SearchMessagesArgs, UpsertTasksArgs,
+    CreateDraftArgs, GetAttachmentArgs, GetMessageArgs, GetThreadArgs, InboxDigestArgs,
+    ListTasksArgs, SaveSummaryArgs, SearchMessagesArgs, UpsertTasksArgs,
 };
-use mailstore::{AttachmentRow, NewDraft, NewTask, SearchQuery, Store, SummaryRow, TaskQuery, ThreadQuery};
+use mailstore::{
+    AttachmentRow, NewDraft, NewTask, SearchQuery, Store, SummaryRow, TaskQuery, ThreadQuery,
+};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::{schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt};
@@ -271,6 +274,15 @@ struct CreateDraftOut {
     id: i64,
 }
 
+/// `get_attachment` の返り値。`path` は必ず `<data_dir>/attachments` の内側の絶対パス。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct AttachmentFile {
+    path: String,
+    filename: String,
+    mime: String,
+    size: i64,
+}
+
 /// すべてのツール description に必ず入れる、送信・既読変更をしないことの明記。
 /// Claude が「このツールで送信できる／既読にできる」と誤解しないようにするための文言。
 const SAFETY_NOTE_JA: &str = "送信はできません。既読状態は変更されません。";
@@ -278,13 +290,16 @@ const SAFETY_NOTE_EN: &str = "This server cannot send mail and never changes rea
 
 struct MeowboxMcp {
     store: Mutex<Store>,
+    /// 展開した添付の置き場（`<data_dir>/attachments`）。`get_attachment` が使う。
+    attachments_dir: PathBuf,
     tool_router: ToolRouter<Self>,
 }
 
 impl MeowboxMcp {
-    fn new(store: Store) -> Self {
+    fn new(store: Store, attachments_dir: PathBuf) -> Self {
         Self {
             store: Mutex::new(store),
+            attachments_dir,
             tool_router: Self::tool_router(),
         }
     }
@@ -477,6 +492,20 @@ impl MeowboxMcp {
     ) -> Result<Json<CreateDraftOut>, String> {
         let store = self.lock_store()?;
         create_draft_impl(&store, &args).map(Json)
+    }
+
+    #[tool(
+        description = "添付を取り出してローカルのファイルパスを返します。そのファイルを読めます。\
+        送信はできません。既読状態は変更されません。\n\
+        Extracts an attachment and returns a local file path that can be read directly. \
+        This server cannot send mail and never changes read state."
+    )]
+    async fn get_attachment(
+        &self,
+        Parameters(args): Parameters<GetAttachmentArgs>,
+    ) -> Result<Json<AttachmentFile>, String> {
+        let store = self.lock_store()?;
+        extract_attachment_impl(&store, &self.attachments_dir, args.id).map(Json)
     }
 }
 
@@ -821,9 +850,9 @@ fn upsert_tasks_impl(
     let mut updated = 0i64;
     for (i, t) in args.tasks.iter().enumerate() {
         let due = match &t.due {
-            Some(s) => Some(
-                parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?,
-            ),
+            Some(s) => {
+                Some(parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?)
+            }
             None => None,
         };
         let new_task = NewTask {
@@ -935,6 +964,97 @@ fn create_draft_impl(
     Ok(CreateDraftOut { id })
 }
 
+/// 無害化した添付ファイル名が空・`_`・`__` に潰れた場合の代わりの名前。
+fn fallback_attachment_name(id: i64) -> String {
+    format!("attachment-{id}")
+}
+
+/// `path` が `dir` の内側にあるかを確認する。両方を `canonicalize` してから
+/// `starts_with` で判定するので、`<dir>` と `<dir>-evil` のような文字列の
+/// 前方一致では通らない。`canonicalize` は実在するパスにしか使えないので、
+/// 呼び出し側は展開（書き出し）が終わった後に呼ぶこと。
+fn is_inside(dir: &Path, path: &Path) -> std::io::Result<bool> {
+    let dir = dir.canonicalize()?;
+    let path = path.canonicalize()?;
+    Ok(path.starts_with(&dir))
+}
+
+/// raw .eml から添付を取り出し、`<attachments_dir>/<message_id>/<安全なファイル名>` に書く。
+fn write_attachment(
+    store: &Store,
+    attachments_dir: &Path,
+    attachment: &AttachmentRow,
+    id: i64,
+) -> std::result::Result<String, String> {
+    let raw_path = store
+        .message_raw_path(attachment.message_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "元のメールのファイルが見つかりません".to_string())?;
+    let raw =
+        std::fs::read(&raw_path).map_err(|_| "元のメールのファイルが見つかりません".to_string())?;
+
+    let index = store
+        .attachment_index(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+    let bytes = mailsync::parse::attachment_bytes(&raw, index)
+        .map_err(|_| "添付の取り出しに失敗しました".to_string())?;
+
+    let safe_name = mailsync::fsname::sanitize_path_segment(&attachment.filename);
+    let safe_name = if matches!(safe_name.as_str(), "" | "_" | "__") {
+        fallback_attachment_name(id)
+    } else {
+        safe_name
+    };
+
+    let dir = attachments_dir.join(attachment.message_id.to_string());
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("添付の保存先を作成できませんでした: {e}"))?;
+
+    let path = dir.join(safe_name);
+    std::fs::write(&path, &bytes).map_err(|e| format!("添付の保存に失敗しました: {e}"))?;
+
+    let path_str = path.to_string_lossy().to_string();
+    store
+        .set_attachment_path(id, &path_str)
+        .map_err(|e| e.to_string())?;
+    Ok(path_str)
+}
+
+/// `get_attachment` の本体。2 回目以降は書き出し済みのファイルを再利用する。
+/// 書き出したパスが `attachments_dir` の外に出ていないことを必ず確認し、
+/// 確認が取れた絶対パスだけを返す。
+fn extract_attachment_impl(
+    store: &Store,
+    attachments_dir: &Path,
+    id: i64,
+) -> std::result::Result<AttachmentFile, String> {
+    let attachment = store
+        .get_attachment(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "添付が見つかりません".to_string())?;
+
+    let path_str = match &attachment.path {
+        Some(existing) if Path::new(existing).exists() => existing.clone(),
+        _ => write_attachment(store, attachments_dir, &attachment, id)?,
+    };
+
+    match is_inside(attachments_dir, Path::new(&path_str)) {
+        Ok(true) => {}
+        Ok(false) => return Err("添付のパスが不正です".to_string()),
+        Err(e) => return Err(format!("添付のパスを確認できませんでした: {e}")),
+    }
+
+    // `path_str` は `attachments_dir`（呼び出し側が絶対パスで渡す）配下のパスなので、
+    // そのまま Claude に渡せる絶対パスになっている。
+    Ok(AttachmentFile {
+        path: path_str,
+        filename: attachment.filename,
+        mime: attachment.mime,
+        size: attachment.size,
+    })
+}
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for MeowboxMcp {
     fn get_info(&self) -> rmcp::model::ServerInfo {
@@ -972,8 +1092,9 @@ async fn main() -> Result<()> {
     let db_path = mailstore::paths::db_path(&data_dir);
     // Store::open は無ければ作るので、空の DB に対しても list_accounts は空配列を返す。
     let store = Store::open(&db_path).with_context(|| format!("open {}", db_path.display()))?;
+    let attachments_dir = mailstore::paths::attachments_dir(&data_dir);
 
-    let server = MeowboxMcp::new(store);
+    let server = MeowboxMcp::new(store, attachments_dir);
     server
         .serve(rmcp::transport::io::stdio())
         .await
@@ -1306,7 +1427,7 @@ mod tests {
             .upsert_task(&mailstore::NewTask {
                 account_id: account,
                 source_message_id: Some(msg1),
-                title: "thread-1 のタスク".into(),
+                title: "thread-1 のタスク",
                 due: None,
                 confidence: 0.9,
                 created_by: "ai",
@@ -1316,7 +1437,7 @@ mod tests {
             .upsert_task(&mailstore::NewTask {
                 account_id: account,
                 source_message_id: Some(msg2),
-                title: "thread-2 のタスク".into(),
+                title: "thread-2 のタスク",
                 due: None,
                 confidence: 0.9,
                 created_by: "ai",
@@ -1590,9 +1711,7 @@ mod tests {
         let second = upsert_tasks_impl(&store, &args).unwrap();
         assert_eq!((second.inserted, second.updated), (0, 1));
 
-        let saved = store
-            .list_tasks(&mailstore::TaskQuery::default())
-            .unwrap();
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].created_by, "ai");
     }
@@ -1654,5 +1773,106 @@ mod tests {
         assert_eq!(draft.subject, "Re: 見積の件");
         assert_eq!(draft.status, "draft");
         assert_eq!(draft.to[0].email, "sender@mail.example");
+    }
+
+    fn sample_eml_with_attachment(filename: &str) -> Vec<u8> {
+        format!(
+            "From: sender <sender@mail.example>\r\n\
+             To: recipient <recipient@mail.example>\r\n\
+             Subject: attachment test\r\n\
+             Date: Wed, 06 Sep 2026 09:00:00 +0900\r\n\
+             Message-ID: <msg-att@mail.example>\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=\"BOUNDARY\"\r\n\
+             \r\n\
+             --BOUNDARY\r\n\
+             Content-Type: text/plain; charset=\"utf-8\"\r\n\
+             \r\n\
+             本文です。\r\n\
+             --BOUNDARY\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Disposition: attachment; filename=\"{filename}\"\r\n\
+             Content-Transfer-Encoding: 7bit\r\n\
+             \r\n\
+             hello attachment\r\n\
+             --BOUNDARY--\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn extract_attachment_impl_writes_the_file_and_returns_an_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let eml_path = dir.path().join("1.eml");
+        std::fs::write(&eml_path, sample_eml_with_attachment("note.txt")).unwrap();
+        let attachments_dir = dir.path().join("attachments");
+
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let message_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "添付テスト",
+            chrono::Utc::now(),
+            Some(eml_path.to_str().unwrap()),
+        );
+        let attachment_id = store
+            .insert_attachment_meta(message_id, "note.txt", "text/plain", 17)
+            .unwrap();
+
+        let out = extract_attachment_impl(&store, &attachments_dir, attachment_id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&out.path).unwrap(),
+            "hello attachment"
+        );
+        assert_eq!(out.filename, "note.txt");
+        assert!(Path::new(&out.path).is_absolute());
+
+        let recorded = store.get_attachment(attachment_id).unwrap().unwrap();
+        assert_eq!(recorded.path.as_deref(), Some(out.path.as_str()));
+    }
+
+    #[test]
+    fn extract_attachment_impl_reports_missing_attachment() {
+        let store = Store::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let err = extract_attachment_impl(&store, dir.path(), 999).unwrap_err();
+        assert!(err.contains("見つかりません"));
+    }
+
+    #[test]
+    fn extract_attachment_impl_keeps_traversal_filenames_inside_the_attachments_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let eml_path = dir.path().join("1.eml");
+        std::fs::write(&eml_path, sample_eml_with_attachment("../evil.txt")).unwrap();
+        let attachments_dir = dir.path().join("attachments");
+
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let message_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "添付テスト",
+            chrono::Utc::now(),
+            Some(eml_path.to_str().unwrap()),
+        );
+        let attachment_id = store
+            .insert_attachment_meta(message_id, "../evil.txt", "text/plain", 17)
+            .unwrap();
+
+        let out = extract_attachment_impl(&store, &attachments_dir, attachment_id).unwrap();
+        let path = Path::new(&out.path);
+        assert!(path
+            .canonicalize()
+            .unwrap()
+            .starts_with(attachments_dir.canonicalize().unwrap()));
     }
 }
