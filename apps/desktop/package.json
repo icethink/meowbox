@@ -15,7 +15,9 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "mcp:build": "cargo build --release -p mailmcp",
+    "mcp:sidecar": "node scripts/copy-mcp-sidecar.mjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.5",
