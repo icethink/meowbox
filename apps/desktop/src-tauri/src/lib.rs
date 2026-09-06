@@ -41,6 +41,8 @@ pub fn run() {
             commands::accounts::test_connection,
             commands::accounts::delete_account,
             commands::accounts::list_projects,
+            commands::sync::sync_account,
+            commands::sync::sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running meowbox");
