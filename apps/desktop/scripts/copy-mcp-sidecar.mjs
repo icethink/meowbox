@@ -45,6 +45,4 @@ if (!existsSync(destDir)) {
 const destPath = join(destDir, `meowbox-mcp-${triple}${exeSuffix}`);
 
 copyFileSync(sourcePath, destPath);
-console.log(
-  `copied ${relative(repoRoot, sourcePath)} -> ${relative(repoRoot, destPath)}`,
-);
+console.log(`copied ${relative(repoRoot, sourcePath)} -> ${relative(repoRoot, destPath)}`);
