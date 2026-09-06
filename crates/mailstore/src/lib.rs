@@ -11,10 +11,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use mailcore::{Account, AccountKind, Address, Message, MessageSummary};
+use mailcore::{Account, AccountKind, Address, Message, MessageSummary, ThreadSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 pub struct Store {
@@ -42,9 +42,13 @@ impl Store {
     }
 
     fn migrate(&self) -> Result<()> {
+        // meta テーブルだけ先に作る。schema_version を読んでから SCHEMA_SQL を流さないと、
+        // 既存 DB では CREATE TABLE IF NOT EXISTS が no-op になり ALTER 前の列のまま止まる。
         self.conn
-            .execute_batch(SCHEMA_SQL)
-            .context("apply schema")?;
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+            )
+            .context("create meta table")?;
         let current: Option<String> = self
             .conn
             .query_row(
@@ -53,16 +57,43 @@ impl Store {
                 |r| r.get(0),
             )
             .optional()?;
-        match current.as_deref().and_then(|v| v.parse::<i64>().ok()) {
-            Some(v) if v == SCHEMA_VERSION => {}
-            Some(v) if v > SCHEMA_VERSION => {
-                anyhow::bail!("database schema {v} is newer than this build ({SCHEMA_VERSION})")
+        let from = current.as_deref().and_then(|v| v.parse::<i64>().ok());
+
+        self.conn
+            .execute_batch(SCHEMA_SQL)
+            .context("apply schema")?;
+
+        if let Some(v) = from {
+            if v > SCHEMA_VERSION {
+                anyhow::bail!("database schema {v} is newer than this build ({SCHEMA_VERSION})");
             }
-            _ => {
-                // 将来: v -> SCHEMA_VERSION の段階的マイグレーションをここに追加
-                self.conn.execute(
-                    "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
-                    params![SCHEMA_VERSION.to_string()],
+            if v < SCHEMA_VERSION {
+                self.upgrade(v)?;
+            }
+        }
+
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
+            params![SCHEMA_VERSION.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// `from` から `SCHEMA_VERSION` への段階的マイグレーション。
+    /// 新しいバージョンを足すときは `if from < N { ... }` を積み増していく。
+    fn upgrade(&self, from: i64) -> Result<()> {
+        if from < 2 {
+            // v2: アーカイブ状態を持つ is_archived 列を messages に追加
+            let has_column = self
+                .conn
+                .prepare("PRAGMA table_info(messages)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .iter()
+                .any(|name| name == "is_archived");
+            if !has_column {
+                self.conn.execute_batch(
+                    "ALTER TABLE messages ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0",
                 )?;
             }
         }
@@ -318,36 +349,233 @@ impl Store {
                  JOIN folders f ON f.id = m.folder_id
                  WHERE m.id = ?1",
                 params![id],
-                |r| {
-                    let to_json: String = r.get(8)?;
-                    let cc_json: String = r.get(9)?;
-                    let date: String = r.get(11)?;
-                    Ok(Message {
-                        id: r.get(0)?,
-                        account_id: r.get(1)?,
-                        folder_path: r.get(2)?,
-                        uid: r.get::<_, i64>(3)? as u32,
-                        message_id: r.get(4)?,
-                        thread_key: r.get(5)?,
-                        from: Address {
-                            email: r.get(6)?,
-                            name: r.get(7)?,
-                        },
-                        to: serde_json::from_str(&to_json).unwrap_or_default(),
-                        cc: serde_json::from_str(&cc_json).unwrap_or_default(),
-                        subject: r.get(10)?,
-                        date: parse_ts(&date),
-                        snippet: r.get(12)?,
-                        body_text: r.get(13)?,
-                        has_attachments: r.get::<_, i64>(14)? != 0,
-                        is_read: r.get::<_, i64>(15)? != 0,
-                        is_flagged: r.get::<_, i64>(16)? != 0,
-                    })
-                },
+                row_to_message,
             )
             .optional()?;
         Ok(row)
     }
+
+    /// スレッド内の全メッセージを日時昇順で取得する（本文つき）。
+    pub fn thread_messages(&self, thread_key: &str) -> Result<Vec<Message>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.id, m.account_id, f.path, m.uid, m.message_id, m.thread_key,
+                    m.from_addr, m.from_name, m.to_json, m.cc_json, m.subject, m.date,
+                    m.snippet, m.body_text, m.has_attachments, m.is_read, m.is_flagged
+             FROM messages m
+             JOIN folders f ON f.id = m.folder_id
+             WHERE m.thread_key = ?1
+             ORDER BY m.date ASC, m.id ASC",
+        )?;
+        let rows = stmt.query_map(params![thread_key], row_to_message)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// スレッド一覧。`q` の条件で絞り、最新メッセージの日時降順で返す。
+    pub fn list_threads(&self, q: &ThreadQuery<'_>) -> Result<Vec<ThreadSummary>> {
+        let mut m_where: Vec<String> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if !q.include_archived {
+            m_where.push("msg.is_archived = 0".into());
+        }
+        if let Some(a) = q.account_id {
+            m_where.push("msg.account_id = ?".into());
+            args.push(Box::new(a));
+        }
+        if let Some(tag) = q.project_tag {
+            m_where.push("a.project_tag = ?".into());
+            args.push(Box::new(tag.to_string()));
+        }
+        let m_where_sql = if m_where.is_empty() {
+            String::new()
+        } else {
+            format!("AND {}", m_where.join(" AND "))
+        };
+
+        let mut having: Vec<&str> = Vec::new();
+        if q.unread_only {
+            having.push("g.unread_count > 0");
+        }
+        if q.flagged_only {
+            having.push("g.is_flagged = 1");
+        }
+        let having_sql = if having.is_empty() {
+            String::new()
+        } else {
+            format!("AND {}", having.join(" AND "))
+        };
+
+        let sql = format!(
+            "WITH m AS (
+               SELECT msg.* FROM messages msg
+               JOIN accounts a ON a.id = msg.account_id
+               WHERE 1=1 {m_where_sql}
+             ),
+             agg AS (
+               SELECT thread_key,
+                      COUNT(*) AS message_count,
+                      SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread_count,
+                      MAX(has_attachments) AS has_attachments,
+                      MAX(is_flagged) AS is_flagged
+               FROM m GROUP BY thread_key
+             ),
+             latest AS (
+               SELECT m.*, ROW_NUMBER() OVER (PARTITION BY thread_key ORDER BY date DESC, id DESC) AS rn
+               FROM m
+             )
+             SELECT l.thread_key, l.id, l.account_id, acc.project_tag, l.subject,
+                    l.from_addr, l.from_name, l.snippet, l.date,
+                    g.message_count, g.unread_count, g.has_attachments, g.is_flagged
+             FROM latest l
+             JOIN agg g ON g.thread_key = l.thread_key
+             JOIN accounts acc ON acc.id = l.account_id
+             WHERE l.rn = 1 {having_sql}
+             ORDER BY l.date DESC, l.id DESC
+             LIMIT ? OFFSET ?"
+        );
+
+        let limit = if q.limit == 0 { 200 } else { q.limit } as i64;
+        args.push(Box::new(limit));
+        args.push(Box::new(q.offset as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+            let date: String = r.get(8)?;
+            Ok(ThreadSummary {
+                thread_key: r.get(0)?,
+                latest_message_id: r.get(1)?,
+                account_id: r.get(2)?,
+                project_tag: r.get(3)?,
+                subject: r.get(4)?,
+                from: Address {
+                    email: r.get(5)?,
+                    name: r.get(6)?,
+                },
+                snippet: r.get(7)?,
+                last_date: parse_ts(&date),
+                message_count: r.get(9)?,
+                unread_count: r.get(10)?,
+                has_attachments: r.get::<_, i64>(11)? != 0,
+                is_flagged: r.get::<_, i64>(12)? != 0,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// 既読/未読をまとめて更新する。`ids` が空なら何もせず 0 を返す。
+    pub fn set_read(&self, ids: &[i64], read: bool) -> Result<usize> {
+        self.set_flag_column("is_read", ids, read)
+    }
+
+    /// フラグをまとめて更新する。`ids` が空なら何もせず 0 を返す。
+    pub fn set_flagged(&self, ids: &[i64], flagged: bool) -> Result<usize> {
+        self.set_flag_column("is_flagged", ids, flagged)
+    }
+
+    /// アーカイブ状態をまとめて更新する。`ids` が空なら何もせず 0 を返す。
+    pub fn set_archived(&self, ids: &[i64], archived: bool) -> Result<usize> {
+        self.set_flag_column("is_archived", ids, archived)
+    }
+
+    /// `is_read` / `is_flagged` / `is_archived` のような 0/1 列を `ids` に対して一括更新する。
+    /// `column` は呼び出し側が渡す固定リテラルのみを想定し、外部入力を SQL に直接
+    /// 埋め込まない（インジェクションの余地を作らない）。
+    fn set_flag_column(&self, column: &str, ids: &[i64], value: bool) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("UPDATE messages SET {column} = ?1 WHERE id IN ({placeholders})");
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(ids.len() + 1);
+        args.push(Box::new(value as i64));
+        for id in ids {
+            args.push(Box::new(*id));
+        }
+        let changed = self
+            .conn
+            .execute(&sql, rusqlite::params_from_iter(args.iter()))?;
+        Ok(changed)
+    }
+
+    /// アカウントごとの未読数（アーカイブ除く）。
+    pub fn unread_counts_by_account(&self) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT account_id, COUNT(*) FROM messages
+             WHERE is_read = 0 AND is_archived = 0
+             GROUP BY account_id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// サイドバーの「ビュー」に出す件数。
+    pub fn view_counts(&self) -> Result<ViewCounts> {
+        let all: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT thread_key) FROM messages WHERE is_archived = 0",
+            [],
+            |r| r.get(0),
+        )?;
+        let unread: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT thread_key) FROM messages
+             WHERE is_archived = 0 AND is_read = 0",
+            [],
+            |r| r.get(0),
+        )?;
+        let flagged: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT thread_key) FROM messages
+             WHERE is_archived = 0 AND is_flagged = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        let tasks: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'open'",
+            [],
+            |r| r.get(0),
+        )?;
+        let drafts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drafts WHERE status = 'draft'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(ViewCounts {
+            all,
+            unread,
+            flagged,
+            tasks,
+            drafts,
+        })
+    }
+}
+
+/// `get_message` / `thread_messages` で共有する行マッピング。
+/// 列の並びは両方の SELECT で揃えてあること。
+fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    let to_json: String = r.get(8)?;
+    let cc_json: String = r.get(9)?;
+    let date: String = r.get(11)?;
+    Ok(Message {
+        id: r.get(0)?,
+        account_id: r.get(1)?,
+        folder_path: r.get(2)?,
+        uid: r.get::<_, i64>(3)? as u32,
+        message_id: r.get(4)?,
+        thread_key: r.get(5)?,
+        from: Address {
+            email: r.get(6)?,
+            name: r.get(7)?,
+        },
+        to: serde_json::from_str(&to_json).unwrap_or_default(),
+        cc: serde_json::from_str(&cc_json).unwrap_or_default(),
+        subject: r.get(10)?,
+        date: parse_ts(&date),
+        snippet: r.get(12)?,
+        body_text: r.get(13)?,
+        has_attachments: r.get::<_, i64>(14)? != 0,
+        is_read: r.get::<_, i64>(15)? != 0,
+        is_flagged: r.get::<_, i64>(16)? != 0,
+    })
 }
 
 /// `insert_message` の入力。所有権を取らないので同期ループで使いやすい。
@@ -381,6 +609,32 @@ pub struct SearchQuery<'a> {
     pub limit: usize,
 }
 
+/// `list_threads` の絞り込み。
+#[derive(Debug, Clone, Default)]
+pub struct ThreadQuery<'a> {
+    pub account_id: Option<i64>,
+    pub project_tag: Option<&'a str>,
+    /// 未読を含むスレッドだけ
+    pub unread_only: bool,
+    /// フラグ付きメッセージを含むスレッドだけ
+    pub flagged_only: bool,
+    /// アーカイブ済みメッセージも数える
+    pub include_archived: bool,
+    /// 0 のときは 200 とみなす
+    pub limit: usize,
+    pub offset: usize,
+}
+
+/// サイドバーの「ビュー」に出す件数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ViewCounts {
+    pub all: i64,
+    pub unread: i64,
+    pub flagged: i64,
+    pub tasks: i64,
+    pub drafts: i64,
+}
+
 fn parse_ts(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|d| d.with_timezone(&Utc))
@@ -412,6 +666,46 @@ mod tests {
             .unwrap();
         let folder = store.ensure_folder(acc.id, "INBOX", "inbox").unwrap();
         (acc.id, folder)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_msg(
+        store: &Store,
+        account_id: i64,
+        folder_id: i64,
+        uid: u32,
+        thread_key: &str,
+        subject: &str,
+        from_name: Option<&str>,
+        date: DateTime<Utc>,
+        is_read: bool,
+        is_flagged: bool,
+        has_attachments: bool,
+    ) -> i64 {
+        let from = Address {
+            name: from_name.map(str::to_string),
+            email: "sender@example.com".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid,
+            message_id: None,
+            thread_key,
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject,
+            date,
+            snippet: subject,
+            body_text: subject,
+            body_html: None,
+            has_attachments,
+            is_read,
+            is_flagged,
+            raw_path: None,
+        };
+        store.insert_message(&m).unwrap().unwrap()
     }
 
     #[test]
@@ -623,5 +917,382 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn list_threads_folds_messages_by_thread_key() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let t0 = Utc::now() - chrono::Duration::hours(2);
+        let t1 = Utc::now() - chrono::Duration::hours(1);
+        let t2 = Utc::now();
+
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "見積の件",
+            Some("山田"),
+            t0,
+            true,
+            false,
+            false,
+        );
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            2,
+            "t1",
+            "Re: 見積の件",
+            Some("佐藤"),
+            t1,
+            false,
+            false,
+            false,
+        );
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            3,
+            "t2",
+            "別件",
+            Some("鈴木"),
+            t2,
+            false,
+            false,
+            false,
+        );
+
+        let threads = store.list_threads(&ThreadQuery::default()).unwrap();
+        assert_eq!(threads.len(), 2);
+
+        let t1_summary = threads
+            .iter()
+            .find(|t| t.thread_key == "t1")
+            .expect("t1 present");
+        assert_eq!(t1_summary.subject, "Re: 見積の件");
+        assert_eq!(t1_summary.from.name.as_deref(), Some("佐藤"));
+        assert_eq!(t1_summary.message_count, 2);
+        assert_eq!(t1_summary.unread_count, 1);
+
+        let t2_summary = threads
+            .iter()
+            .find(|t| t.thread_key == "t2")
+            .expect("t2 present");
+        assert_eq!(t2_summary.message_count, 1);
+        assert_eq!(t2_summary.unread_count, 1);
+    }
+
+    #[test]
+    fn list_threads_excludes_archived() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let id = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(
+            store.list_threads(&ThreadQuery::default()).unwrap().len(),
+            1
+        );
+
+        store.set_archived(&[id], true).unwrap();
+        assert_eq!(
+            store.list_threads(&ThreadQuery::default()).unwrap().len(),
+            0
+        );
+
+        let with_archived = store
+            .list_threads(&ThreadQuery {
+                include_archived: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(with_archived.len(), 1);
+    }
+
+    #[test]
+    fn list_threads_filters_by_project_tag() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_a, folder_a) = seed(&store);
+        let acc_b = store
+            .add_account(
+                "test-b",
+                AccountKind::Imap,
+                "b@example.com",
+                Some("案件B"),
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        let folder_b = store.ensure_folder(acc_b.id, "INBOX", "inbox").unwrap();
+
+        insert_msg(
+            &store,
+            account_a,
+            folder_a,
+            1,
+            "t1",
+            "件名A",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        insert_msg(
+            &store,
+            acc_b.id,
+            folder_b,
+            1,
+            "t2",
+            "件名B",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let by_a = store
+            .list_threads(&ThreadQuery {
+                project_tag: Some("案件A"),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(by_a.len(), 1);
+        assert_eq!(by_a[0].thread_key, "t1");
+    }
+
+    #[test]
+    fn list_threads_paginates() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let base = Utc::now();
+        for i in 0..3 {
+            insert_msg(
+                &store,
+                account_id,
+                folder_id,
+                i + 1,
+                &format!("t{i}"),
+                "件名",
+                None,
+                base - chrono::Duration::minutes(i as i64),
+                false,
+                false,
+                false,
+            );
+        }
+
+        let page = store
+            .list_threads(&ThreadQuery {
+                limit: 1,
+                offset: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].thread_key, "t1");
+    }
+
+    #[test]
+    fn mark_updates_read_flag_and_archive() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let id = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        assert_eq!(store.set_read(&[id], true).unwrap(), 1);
+        assert!(store.get_message(id).unwrap().unwrap().is_read);
+
+        assert_eq!(store.set_flagged(&[id], true).unwrap(), 1);
+        assert!(store.get_message(id).unwrap().unwrap().is_flagged);
+
+        assert_eq!(store.set_archived(&[id], true).unwrap(), 1);
+
+        assert_eq!(store.set_read(&[], true).unwrap(), 0);
+        assert_eq!(store.set_flagged(&[], true).unwrap(), 0);
+        assert_eq!(store.set_archived(&[], true).unwrap(), 0);
+    }
+
+    #[test]
+    fn view_counts_counts_threads_not_messages() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名1",
+            None,
+            Utc::now(),
+            true,
+            true,
+            false,
+        );
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            2,
+            "t1",
+            "Re: 件名1",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            3,
+            "t2",
+            "件名2",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        store
+            .conn()
+            .execute(
+                "INSERT INTO tasks(account_id, title, status, created_at)
+                 VALUES (?1, 'task', 'open', ?2)",
+                params![account_id, Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO drafts(account_id, status, created_at) VALUES (?1, 'draft', ?2)",
+                params![account_id, Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+
+        let counts = store.view_counts().unwrap();
+        assert_eq!(counts.all, 2);
+        assert_eq!(counts.unread, 2);
+        assert_eq!(counts.flagged, 1);
+        assert_eq!(counts.tasks, 1);
+        assert_eq!(counts.drafts, 1);
+    }
+
+    #[test]
+    fn migrates_v1_database_to_v2() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "meowbox_v1_migration_test_{}_{}.sqlite",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta(key, value) VALUES ('schema_version', '1');
+                 CREATE TABLE accounts (
+                     id            INTEGER PRIMARY KEY,
+                     name          TEXT NOT NULL,
+                     kind          TEXT NOT NULL,
+                     email         TEXT NOT NULL UNIQUE,
+                     project_tag   TEXT,
+                     settings_json TEXT NOT NULL DEFAULT '{}',
+                     created_at    TEXT NOT NULL
+                 );
+                 CREATE TABLE folders (
+                     id           INTEGER PRIMARY KEY,
+                     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     path         TEXT NOT NULL,
+                     role         TEXT NOT NULL DEFAULT 'other',
+                     uidvalidity  INTEGER,
+                     last_uid     INTEGER NOT NULL DEFAULT 0,
+                     UNIQUE (account_id, path)
+                 );
+                 CREATE TABLE messages (
+                     id              INTEGER PRIMARY KEY,
+                     account_id      INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     folder_id       INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                     uid             INTEGER NOT NULL,
+                     message_id      TEXT,
+                     thread_key      TEXT NOT NULL,
+                     from_addr       TEXT NOT NULL,
+                     from_name       TEXT,
+                     to_json         TEXT NOT NULL DEFAULT '[]',
+                     cc_json         TEXT NOT NULL DEFAULT '[]',
+                     subject         TEXT NOT NULL DEFAULT '',
+                     date            TEXT NOT NULL,
+                     snippet         TEXT NOT NULL DEFAULT '',
+                     body_text       TEXT NOT NULL DEFAULT '',
+                     body_html       TEXT,
+                     has_attachments INTEGER NOT NULL DEFAULT 0,
+                     is_read         INTEGER NOT NULL DEFAULT 0,
+                     is_flagged      INTEGER NOT NULL DEFAULT 0,
+                     raw_path        TEXT,
+                     UNIQUE (folder_id, uid)
+                 );
+                 INSERT INTO accounts(id, name, kind, email, project_tag, settings_json, created_at)
+                 VALUES (1, 'legacy', 'imap', 'legacy@example.com', NULL, '{}', '2024-01-01T00:00:00Z');
+                 INSERT INTO folders(id, account_id, path, role) VALUES (1, 1, 'INBOX', 'inbox');
+                 INSERT INTO messages(id, account_id, folder_id, uid, thread_key, from_addr, subject, date)
+                 VALUES (1, 1, 1, 1, 'legacy-thread', 'a@example.com', 'legacy subject', '2024-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+
+        let has_column = store
+            .conn()
+            .prepare("PRAGMA table_info(messages)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+            .iter()
+            .any(|n| n == "is_archived");
+        assert!(has_column);
+
+        let threads = store.list_threads(&ThreadQuery::default()).unwrap();
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].thread_key, "legacy-thread");
+
+        drop(store);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 }

@@ -1,4 +1,4 @@
--- Meowbox schema v1
+-- Meowbox schema v2
 -- 変更するときは migrations の version を上げること（Store::open が適用する）
 
 CREATE TABLE IF NOT EXISTS meta (
@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS messages (
     has_attachments INTEGER NOT NULL DEFAULT 0,
     is_read         INTEGER NOT NULL DEFAULT 0,
     is_flagged      INTEGER NOT NULL DEFAULT 0,
+    is_archived     INTEGER NOT NULL DEFAULT 0,
     raw_path        TEXT,
     UNIQUE (folder_id, uid)
 );
