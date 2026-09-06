@@ -163,10 +163,11 @@ docs/adr          設計判断の記録
 | フェーズ | 内容 | 状態 |
 |---|---|---|
 | P0-a | workspace 雛形、スキーマ、`meowbox init / accounts / search` | ✅ |
-| P0-b | `mailsync` で IMAP 同期 → SQLite | 次 |
-| P1 | `mailmcp`（`list_accounts` / `search_messages` / `get_thread` / `inbox_digest`） | |
+| P0-b | `mailsync` で IMAP 同期 → SQLite | ✅ |
+| P1 | `mailmcp`（`list_accounts` / `search_messages` / `get_thread` / `inbox_digest`） | 次 |
 | P2 | Tauri UI（一覧・スレッド・タスク・ダイジェスト） | ✅ |
-| P3 | 要約・タスク抽出・下書き・承認送信を実データに繋ぐ | |
+| P3-a | `apps/desktop/src/api/` を Tauri invoke に差し替え、実データの一覧・スレッド表示 | ✅ 2026-09-06 |
+| P3-b | 要約・タスク抽出・下書き・承認送信を実データに繋ぐ | |
 | P4 | Gmail / M365 OAuth、IMAP IDLE、過去分バックフィル | |
 | P5 | 案件横断ダッシュボード、日次ダイジェスト、Thunderbird からのインポート | |
 
