@@ -428,12 +428,12 @@ fn exercises_every_tool_over_stdio() {
             "list_accounts の返り値に {forbidden} が含まれています: {accounts_str}"
         );
     }
-    assert_eq!(accounts.as_array().unwrap().len(), 2);
+    assert_eq!(accounts["accounts"].as_array().unwrap().len(), 2);
 
     // --- search_messages（query 無し）が結果を返す。
     let search_results = server.call_ok("search_messages", json!({}));
     assert!(
-        !search_results.as_array().unwrap().is_empty(),
+        !search_results["messages"].as_array().unwrap().is_empty(),
         "search_messages が空でした: {search_results:?}"
     );
 
@@ -499,7 +499,7 @@ fn exercises_every_tool_over_stdio() {
     assert_eq!(second["updated"].as_i64(), Some(1));
 
     let tasks = server.call_ok("list_tasks", json!({}));
-    assert_eq!(tasks.as_array().unwrap().len(), 1);
+    assert_eq!(tasks["tasks"].as_array().unwrap().len(), 1);
 
     // --- create_draft: {id} を返し、送信されない（DB 上は status = "draft"）。
     let draft_res = server.call_ok(
@@ -548,4 +548,122 @@ fn exercises_every_tool_over_stdio() {
             "summary": "要約",
         }),
     );
+}
+
+/// 「配列をそのまま返すツールがあると Claude 側の structuredContent 検証が落ちる」
+/// という再発を防ぐためのテスト。全ツールを一通り呼び、`structuredContent` が
+/// 必ず JSON オブジェクトになっていることを確認する。
+/// あわせて `tools/list` の `outputSchema`（宣言されている場合）が
+/// `"type": "object"` になっていることも確認する。
+#[test]
+fn every_tool_returns_object_structured_content() {
+    // **重要**: MEOWBOX_DATA_DIR は必ず一時ディレクトリに向ける。
+    let data_dir = tempfile::tempdir().unwrap();
+    let db_path = mailstore::paths::db_path(data_dir.path());
+    let mail_root = mailstore::paths::mail_dir(data_dir.path());
+    std::fs::create_dir_all(&mail_root).unwrap();
+
+    const THREAD_KEY: &str = "thread-1";
+
+    let (account_id, msg_id, attachment_id) = {
+        let store = Store::open(&db_path).unwrap();
+
+        let account_id = store
+            .add_account(
+                "メール A",
+                AccountKind::Imap,
+                "account-a@mail-a.example",
+                Some("project-a"),
+                &json!({}),
+            )
+            .unwrap()
+            .id;
+        let folder_id = store.ensure_folder(account_id, "INBOX", "inbox").unwrap();
+
+        let (msg_id, parsed) = insert_fixture_message(
+            &store,
+            &mail_root,
+            account_id,
+            folder_id,
+            1,
+            "attachment-mixed.eml",
+            THREAD_KEY,
+            false,
+        );
+        let mut attachment_id = 0i64;
+        for att in &parsed.attachments {
+            attachment_id = store
+                .insert_attachment_meta(msg_id, &att.filename, &att.mime, att.size)
+                .unwrap();
+        }
+        assert!(
+            attachment_id > 0,
+            "attachment-mixed.eml に添付が見つかりません"
+        );
+
+        (account_id, msg_id, attachment_id)
+    };
+
+    let mut server = Server::start(data_dir.path());
+    server.initialize();
+
+    let tools = server.list_tools();
+
+    // ツール名 → 引数の対応表。`tools/list` に新しいツールが増えたら、ここに
+    // 追加しない限りテストが失敗するようにする（気づけるように）。
+    let args_for = |name: &str| -> Value {
+        match name {
+            "list_accounts" => json!({}),
+            "list_projects" => json!({}),
+            "search_messages" => json!({}),
+            "get_thread" => json!({ "thread_key": THREAD_KEY, "include_quotes": false }),
+            "get_message" => json!({ "id": msg_id, "include_html": false }),
+            "get_attachment" => json!({ "id": attachment_id }),
+            "inbox_digest" => json!({}),
+            "save_summary" => json!({
+                "target": format!("thread:{THREAD_KEY}"),
+                "model": "claude-test",
+                "summary": "要約テスト本文",
+            }),
+            "upsert_tasks" => json!({
+                "tasks": [{
+                    "account_id": account_id,
+                    "source_message_id": msg_id,
+                    "title": "見積の確認",
+                    "due": null,
+                    "confidence": 0.9,
+                }]
+            }),
+            "list_tasks" => json!({}),
+            "create_draft" => json!({
+                "account_id": account_id,
+                "in_reply_to": msg_id,
+                "body": "承知しました。",
+            }),
+            other => panic!(
+                "tools/list に新しいツール `{other}` がありますが、\
+                 このテストの引数対応表に登録されていません。テストを直してください。"
+            ),
+        }
+    };
+
+    for t in &tools {
+        let name = t["name"].as_str().expect("tool name").to_string();
+        let args = args_for(&name);
+
+        // outputSchema が宣言されていれば、必ず object であることを確認する。
+        if let Some(schema) = t.get("outputSchema") {
+            assert_eq!(
+                schema.get("type").and_then(Value::as_str),
+                Some("object"),
+                "{name} の outputSchema が object ではありません: {schema:?}"
+            );
+        }
+
+        let structured = server.call_ok(&name, args);
+        assert!(
+            structured.is_object(),
+            "{name} の structuredContent が object ではありません: {structured:?}"
+        );
+    }
 }

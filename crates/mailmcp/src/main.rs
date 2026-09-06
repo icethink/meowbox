@@ -62,6 +62,19 @@ struct ProjectInfo {
     unread_count: i64,
 }
 
+/// `list_accounts` の返り値。MCP の `structuredContent` はオブジェクトでなければ
+/// ならないため、トップレベルが配列にならないようここで包む。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct ListAccountsOut {
+    accounts: Vec<AccountInfo>,
+}
+
+/// `list_projects` の返り値。理由は `ListAccountsOut` と同じ。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct ListProjectsOut {
+    projects: Vec<ProjectInfo>,
+}
+
 /// メールアドレス 1 件。`mailcore::Address` は `schemars::JsonSchema` を実装していないので
 /// MCP の出力用にラップする。
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
@@ -151,6 +164,13 @@ impl From<mailcore::Task> for TaskOut {
     }
 }
 
+/// `list_tasks` の返り値。MCP の `structuredContent` はオブジェクトでなければ
+/// ならないため、トップレベルが配列にならないようここで包む。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct ListTasksOut {
+    tasks: Vec<TaskOut>,
+}
+
 /// DB の文字列表現へ変換する。`mailstore` 側の同名関数は非公開なのでここに持つ。
 fn task_status_str(s: mailcore::TaskStatus) -> &'static str {
     match s {
@@ -170,6 +190,15 @@ fn parse_task_status(s: &str) -> std::result::Result<mailcore::TaskStatus, Strin
             "不明な status です（open / done / dismissed のいずれか）: {other}"
         )),
     }
+}
+
+/// `search_messages` の返り値。MCP の `structuredContent` はオブジェクトでなければ
+/// ならないため、トップレベルが配列にならないようここで包む。
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+struct SearchMessagesOut {
+    messages: Vec<MessageSearchResult>,
+    /// limit で切ったら true（続きがあるかもしれない）。
+    truncated: bool,
 }
 
 /// `search_messages` の 1 件。
@@ -320,7 +349,7 @@ impl MeowboxMcp {
         description = "登録されているメールアカウントの一覧を返す。送信はできません。既読状態は変更されません。\n\
         List the configured mail accounts. This server cannot send mail and never changes read state."
     )]
-    async fn list_accounts(&self) -> Result<Json<Vec<AccountInfo>>, String> {
+    async fn list_accounts(&self) -> Result<Json<ListAccountsOut>, String> {
         let store = self.lock_store()?;
         let accounts = store.list_accounts().map_err(|e| e.to_string())?;
         let unread: HashMap<i64, i64> = store
@@ -345,7 +374,7 @@ impl MeowboxMcp {
                 unread_count: unread.get(&a.id).copied().unwrap_or(0),
             });
         }
-        Ok(Json(out))
+        Ok(Json(ListAccountsOut { accounts: out }))
     }
 
     #[tool(
@@ -354,7 +383,7 @@ impl MeowboxMcp {
         List accounts grouped by project tag; accounts without a tag are grouped last. \
         This server cannot send mail and never changes read state."
     )]
-    async fn list_projects(&self) -> Result<Json<Vec<ProjectInfo>>, String> {
+    async fn list_projects(&self) -> Result<Json<ListProjectsOut>, String> {
         let store = self.lock_store()?;
         let accounts = store.list_accounts().map_err(|e| e.to_string())?;
         let unread: HashMap<i64, i64> = store
@@ -363,21 +392,25 @@ impl MeowboxMcp {
             .into_iter()
             .collect();
 
-        Ok(Json(group_accounts_by_project(&accounts, &unread)))
+        Ok(Json(ListProjectsOut {
+            projects: group_accounts_by_project(&accounts, &unread),
+        }))
     }
 
     #[tool(
         description = "全文検索。件名・本文・差出人・案件タグ・既読状態などで絞り込み、\
-        軽量なメッセージ一覧（本文は含まない）を返す。limit は 200 件までに丸められる。\
+        軽量なメッセージ一覧（本文は含まない）を返す。limit は 1〜200 に丸められる。\
+        上限で切れたときは truncated=true を返す。\
         送信はできません。既読状態は変更されません。\n\
         Full-text search across subject/body/sender/project/read-state; returns a \
-        lightweight message list without bodies. limit is capped at 200. \
+        lightweight message list without bodies. limit is clamped to 1..=200. \
+        Returns truncated=true when the result was capped. \
         This server cannot send mail and never changes read state."
     )]
     async fn search_messages(
         &self,
         Parameters(args): Parameters<SearchMessagesArgs>,
-    ) -> Result<Json<Vec<MessageSearchResult>>, String> {
+    ) -> Result<Json<SearchMessagesOut>, String> {
         let store = self.lock_store()?;
         search_messages_impl(&store, &args).map(Json)
     }
@@ -472,7 +505,7 @@ impl MeowboxMcp {
     async fn list_tasks(
         &self,
         Parameters(args): Parameters<ListTasksArgs>,
-    ) -> Result<Json<Vec<TaskOut>>, String> {
+    ) -> Result<Json<ListTasksOut>, String> {
         let store = self.lock_store()?;
         list_tasks_impl(&store, &args).map(Json)
     }
@@ -565,24 +598,32 @@ fn parse_rfc3339(s: &str) -> std::result::Result<DateTime<Utc>, String> {
         .map_err(|e| format!("日時の形式が不正です（RFC3339 で指定してください）: {s} ({e})"))
 }
 
-/// `search_messages` の本体。`limit` は 200 で頭打ちにする
-/// （Claude が大量に取って文脈を潰さないように）。
+/// `search_messages` の本体。`limit` は 1〜200 に丸める
+/// （Claude が大量に取って文脈を潰さないように上限を、`truncated` の意味を壊さないように
+/// 下限を設ける）。
 fn search_messages_impl(
     store: &Store,
     args: &SearchMessagesArgs,
-) -> std::result::Result<Vec<MessageSearchResult>, String> {
+) -> std::result::Result<SearchMessagesOut, String> {
     let since = args.since.as_deref().map(parse_rfc3339).transpose()?;
-    let limit = args.limit.min(200);
+    // Store::search 側も内部で 1 未満を 1 に丸めるため、MCP 層でも下限を 1 に揃える
+    // （0 のまま渡すと truncated の意味が壊れるため）。
+    let limit = args.limit.clamp(1, 200);
 
+    // 上限に達したかどうかを見分けるため、実際には limit + 1 件を問い合わせる。
     let query = SearchQuery {
         text: args.query.as_deref(),
         account_id: args.account_id,
         project_tag: args.project.as_deref(),
         since,
         unread_only: args.unread_only,
-        limit,
+        limit: limit.saturating_add(1),
     };
-    let results = store.search(&query).map_err(|e| e.to_string())?;
+    let mut results = store.search(&query).map_err(|e| e.to_string())?;
+    let truncated = results.len() > limit;
+    if truncated {
+        results.truncate(limit);
+    }
 
     // アカウント id → project_tag の対応表を 1 回だけ引く
     // （メッセージごとに get_account を呼ばない）。
@@ -593,7 +634,7 @@ fn search_messages_impl(
         .map(|a| (a.id, a.project_tag))
         .collect();
 
-    Ok(results
+    let messages = results
         .into_iter()
         .map(|m| MessageSearchResult {
             id: m.id,
@@ -606,7 +647,12 @@ fn search_messages_impl(
             account_id: m.account_id,
             project_tag: project_by_account.get(&m.account_id).cloned().flatten(),
         })
-        .collect())
+        .collect();
+
+    Ok(SearchMessagesOut {
+        messages,
+        truncated,
+    })
 }
 
 /// raw .eml を読み直して引用・署名部分を取り出す。読み込み・パースに失敗しても
@@ -879,7 +925,7 @@ fn upsert_tasks_impl(
 fn list_tasks_impl(
     store: &Store,
     args: &ListTasksArgs,
-) -> std::result::Result<Vec<TaskOut>, String> {
+) -> std::result::Result<ListTasksOut, String> {
     let status = args.status.as_deref().map(parse_task_status).transpose()?;
     let query = TaskQuery {
         status,
@@ -888,7 +934,9 @@ fn list_tasks_impl(
         limit: 0,
     };
     let tasks = store.list_tasks(&query).map_err(|e| e.to_string())?;
-    Ok(tasks.into_iter().map(TaskOut::from).collect())
+    Ok(ListTasksOut {
+        tasks: tasks.into_iter().map(TaskOut::from).collect(),
+    })
 }
 
 /// `create_draft` の宛先・件名を決める。`to` / `subject` が明示されていればそちらを
@@ -1269,8 +1317,102 @@ mod tests {
         // 「エラーにならず結果が返る」ことで確認する（Store::search は limit をそのまま
         // SQL の LIMIT に使うため、巨大な値を渡してもクラッシュはしないが、
         // ここでは呼び出し側の丸め込みを検証する）。
-        let results = search_messages_impl(&store, &args).unwrap();
-        assert_eq!(results.len(), 1);
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages.len(), 1);
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn search_messages_impl_sets_truncated_when_capped() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        for i in 0..3 {
+            insert_msg(
+                &store,
+                account,
+                folder,
+                i + 1,
+                &format!("t{i}"),
+                "件名",
+                chrono::Utc::now(),
+                None,
+            );
+        }
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 2,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages.len(), 2);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn search_messages_impl_is_not_truncated_when_results_exactly_fill_limit() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        for i in 0..3 {
+            insert_msg(
+                &store,
+                account,
+                folder,
+                i + 1,
+                &format!("t{i}"),
+                "件名",
+                chrono::Utc::now(),
+                None,
+            );
+        }
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 3,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages.len(), 3);
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn search_messages_impl_treats_limit_zero_as_one() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        for i in 0..2 {
+            insert_msg(
+                &store,
+                account,
+                folder,
+                i + 1,
+                &format!("t{i}"),
+                "件名",
+                chrono::Utc::now(),
+                None,
+            );
+        }
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 0,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages.len(), 1);
+        assert!(out.truncated);
     }
 
     #[test]
@@ -1297,9 +1439,9 @@ mod tests {
             unread_only: false,
             limit: 30,
         };
-        let results = search_messages_impl(&store, &args).unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].project_tag.as_deref(), Some("案件A"));
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages.len(), 1);
+        assert_eq!(out.messages[0].project_tag.as_deref(), Some("案件A"));
     }
 
     #[test]
