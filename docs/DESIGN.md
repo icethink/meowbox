@@ -83,7 +83,8 @@ drafts(id, account_id, in_reply_to, to_json, subject, body, status[draft|approve
 messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, external content
 ```
 - `project_tag` で案件ごとの束ね方を表現（1案件=1アドレスとは限らないので、複数アカウントを同じタグにできる）
-- raw `.eml` を `data/mail/<account>/<folder>/<uid>.eml` に保存 → MCPが落ちていても Claude がファイルとして読める保険
+- raw `.eml` を `<data_dir>/mail/<account_id>/<folder>/<uid>.eml` に保存 → MCPが落ちていても Claude がファイルとして読める保険。
+  `data_dir` の既定は OS のアプリデータディレクトリ配下（Windows なら `%APPDATA%\dev.icethink.meowbox\`）。`MEOWBOX_DATA_DIR` で上書きできる。
 
 ## 6. MCP ツール設計（Claude から見える面）
 最初から「AIが使いやすい粒度」で切る。1通ずつ取らせない。引数の型は `crates/mailmcp/src/lib.rs`。

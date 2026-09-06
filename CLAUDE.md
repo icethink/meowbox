@@ -37,7 +37,9 @@ cargo run -p mailcli -- accounts list
 2. **秘密情報を DB / ログ / settings_json に書かない。** パスワード・トークンは `keyring`。
 3. **MCP ツールは AI が使いやすい粒度で。** 1 通ずつ取らせない。スレッド・ダイジェスト単位で返す。
    返り値は軽量（`MessageSummary`）。本文は `get_thread` / `get_message` のときだけ。
-4. **raw .eml は必ずファイルにも保存する**（`data/mail/<account>/<folder>/<uid>.eml`）。
+4. **raw .eml は必ずファイルにも保存する**（`<data_dir>/mail/<account_id>/<folder>/<uid>.eml`）。
+   `data_dir` の既定は OS のアプリデータディレクトリ配下（Windows なら `%APPDATA%\dev.icethink.meowbox\`）。
+   `MEOWBOX_DATA_DIR` で上書きできる。
    MCP が落ちていても Claude がファイルとして読める保険。
 5. **スキーマ変更は `schema.sql` + `SCHEMA_VERSION` + マイグレーション** の 3 点セット。
 6. 日本語メールが前提。ISO-2022-JP / Shift_JIS のデコード、trigram FTS を壊さない。

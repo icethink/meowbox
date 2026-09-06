@@ -29,7 +29,8 @@ tokio の AsyncRead/AsyncWrite とそのまま噛み合わせる（`tokio-util` 
 **同期手順**（`SyncEngine::sync_once`）— `folder_status` → 保存済み `uidvalidity` と
 比較し、変わっていれば `last_uid = 0` に戻して取り直す → `UID SEARCH UID (last+1):*
 SINCE <90日前>` → 200 件ずつ `UID FETCH (UID FLAGS RFC822)` → raw を
-`data/mail/<account_id>/<folder>/<uid>.eml` に保存 → `parse` → `insert_message`。
+`<data_dir>/mail/<account_id>/<folder>/<uid>.eml` に保存（P3-a でデータ置き場を
+アプリデータディレクトリ配下に移した）→ `parse` → `insert_message`。
 **1 通のパース失敗で全体を止めない**。`SyncReport { fetched, inserted, skipped, errors }`
 に数えてログに残し、次の UID へ進む。
 
