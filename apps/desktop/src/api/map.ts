@@ -89,6 +89,7 @@ export function threadDetailToView(d: ThreadDetailDto, now?: Date): ThreadDetail
         body: [{ text: d.summary.summary }] as RichSpan[],
         generated_label: formatMessageTime(d.summary.created_at, now),
         generated_at: d.summary.created_at,
+        model: d.summary.model,
       }
     : null;
 

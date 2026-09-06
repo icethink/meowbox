@@ -141,6 +141,7 @@ export const mockThreadDetails: Record<string, ThreadDetail> = {
       target: 'thread:th-estimate',
       generated_label: '10:02 生成',
       generated_at: '2025-09-02T01:02:00Z',
+      model: 'claude-opus-5',
       body: [
         { text: 'ECサイトリニューアル案件の追加見積に関するやり取り。山田氏は前回提示分に加え、' },
         { text: '①検索機能の絞り込み拡張 ②会員ランク別価格表示 ③レビュー画像添付', strong: true },
@@ -216,6 +217,7 @@ export const mockThreadDetails: Record<string, ThreadDetail> = {
       target: 'thread:th-prod-error',
       generated_label: '10:30 生成',
       generated_at: '2025-09-02T01:30:00Z',
+      model: 'claude-opus-5',
       body: [
         { text: '本番環境の一覧画面で 500 エラーが発生している。' },
         { text: 'まずログを確認し、一次対応の連絡を今日中に返す必要がある', strong: true },
@@ -269,6 +271,7 @@ export const mockThreadDetails: Record<string, ThreadDetail> = {
       target: 'thread:th-monthly-meeting',
       generated_label: '昨日 16:20 生成',
       generated_at: '2025-09-01T07:20:00Z',
+      model: 'claude-opus-5',
       body: [
         { text: '9月の定例会は ' },
         { text: '9/12（金）14:00〜', strong: true },
@@ -322,6 +325,7 @@ export const mockThreadDetails: Record<string, ThreadDetail> = {
       target: 'thread:th-product-images',
       generated_label: '昨日 14:35 生成',
       generated_at: '2025-09-01T05:35:00Z',
+      model: 'claude-opus-5',
       body: [
         { text: '差し替え用の商品画像 20 点が共有フォルダに格納済み。' },
         { text: '内容確認の依頼', strong: true },
@@ -399,6 +403,7 @@ export const mockThreadDetails: Record<string, ThreadDetail> = {
       target: 'thread:th-acceptance-doc',
       generated_label: '8/29 11:20 生成',
       generated_at: '2025-08-29T02:20:00Z',
+      model: 'claude-opus-5',
       body: [
         { text: '8月分の検収書が添付されている。' },
         { text: '押印のうえ返送', strong: true },

@@ -79,6 +79,8 @@ export interface AiSummary {
   /** "10:02" のような表示用ラベル */
   generated_label: string;
   generated_at: Timestamp;
+  /** 要約を書いたモデル名。`ai_summaries.model` */
+  model: string;
 }
 
 /** スレッド内の 1 通 */

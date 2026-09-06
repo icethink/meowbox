@@ -10,6 +10,7 @@ import { AccountWizard } from './components/onboarding/AccountWizard';
 import { EmptyState } from './components/onboarding/EmptyState';
 import { Toast } from './components/ui/Toast';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useAutoRefresh, useRefreshOnFocus } from './hooks/useRefreshOnFocus';
 import {
   getThread,
   listAccounts,
@@ -32,6 +33,7 @@ export default function App() {
     activeView,
     accountWizardOpen,
     setAccountWizardOpen,
+    autoRefresh,
   } = useAppStore();
 
   const [accounts, setAccounts] = useState<Account[] | null>(null);
@@ -79,6 +81,23 @@ export default function App() {
     })();
     return () => unlisten?.();
   }, [refreshThreads, refreshViews]);
+
+  /** 開いているスレッドの詳細だけを読み直す（フォーカス時・ポーリング時）。既読化はしない */
+  const refreshSelected = useCallback(async () => {
+    if (!selectedThreadKey) return;
+    const detail = await getThread(selectedThreadKey);
+    setSelected(detail);
+  }, [selectedThreadKey]);
+
+  // ウィンドウにフォーカスが戻ったら一覧・ビュー件数・開いているスレッドを読み直す。
+  // Claude が MCP 経由で要約やタスクを書き込んでも GUI は別プロセスで気づかないため
+  const refreshOnFocus = useCallback(async () => {
+    await Promise.all([refreshThreads(), refreshViews(), refreshSelected()]);
+  }, [refreshThreads, refreshViews, refreshSelected]);
+  useRefreshOnFocus(refreshOnFocus);
+  // 60 秒ポーリング。既定オフ
+  // TODO: 設定モーダルにトグルを出す（別単位）
+  useAutoRefresh(refreshOnFocus, 60_000, autoRefresh);
 
   function handleAdded(accountId: number) {
     void syncAccount(accountId);

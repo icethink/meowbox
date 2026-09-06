@@ -47,6 +47,7 @@ describe('ThreadView', () => {
             body: [{ text: '見積の返信待ちです。' }],
             generated_label: '10:02',
             generated_at: '2025-09-02T01:02:00Z',
+            model: 'claude-opus-5',
           },
         })}
         onArchive={() => {}}

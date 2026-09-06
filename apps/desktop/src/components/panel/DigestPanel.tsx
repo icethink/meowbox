@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { getDigest } from '../../api';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import type { Digest, DigestItem } from '../../types.ui';
 import { useAppStore } from '../../store/app';
 import { Checkbox } from '../ui/Checkbox';
@@ -58,21 +59,25 @@ export function DigestPanel() {
   const [digest, setDigest] = useState<Digest | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function load() {
-      try {
-        const result = await getDigest();
-        setDigest(result);
-      } catch (err) {
-        // 本文やアドレスをログに出さないよう、エラーだけ記録して空状態にする
-        console.error('failed to load digest', err);
-        setDigest(null);
-      } finally {
-        setLoading(false);
-      }
+  const load = useCallback(async () => {
+    try {
+      const result = await getDigest();
+      setDigest(result);
+    } catch (err) {
+      // 本文やアドレスをログに出さないよう、エラーだけ記録して空状態にする
+      console.error('failed to load digest', err);
+      setDigest(null);
+    } finally {
+      setLoading(false);
     }
-    void load();
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // ウィンドウにフォーカスが戻ったらダイジェストを読み直す
+  useRefreshOnFocus(load);
 
   return (
     <aside
