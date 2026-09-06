@@ -47,6 +47,19 @@ impl Store {
         Ok(store)
     }
 
+    /// 複数の書き込みを 1 つのトランザクションにまとめる。
+    /// クロージャがエラーを返したら、その中で行った書き込みは全部巻き戻る
+    /// （`Transaction` を明示的に `commit()` しなければ drop 時にロールバックされるため）。
+    pub fn transaction<T>(
+        &self,
+        f: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
     fn migrate(&self) -> Result<()> {
         // meta テーブルだけ先に作る。schema_version を読んでから SCHEMA_SQL を流さないと、
         // 既存 DB では CREATE TABLE IF NOT EXISTS が no-op になり ALTER 前の列のまま止まる。
@@ -1215,6 +1228,53 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         store.migrate().unwrap();
         assert_eq!(store.list_accounts().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn transaction_rolls_back_all_writes_on_error() {
+        let store = Store::open_in_memory().unwrap();
+        let result: Result<()> = store.transaction(|tx| {
+            tx.execute(
+                "INSERT INTO meta(key, value) VALUES ('test:rollback', 'x')",
+                [],
+            )?;
+            anyhow::bail!("boom");
+        });
+        assert!(result.is_err());
+
+        let count: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key = 'test:rollback'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn transaction_commits_writes_on_ok() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "INSERT INTO meta(key, value) VALUES ('test:commit', 'x')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let value: String = store
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'test:commit'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "x");
     }
 
     #[test]
