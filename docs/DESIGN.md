@@ -133,7 +133,8 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 | P0-b | mailsync で IMAP 同期 → SQLite。手元の IMAP アカウントで動作確認 | ✅ 2026-09-04 |
 | P1 | mailmcp: `list_accounts` `search_messages` `get_thread` `inbox_digest`。Cowork から叩けることを確認 | ここで Thunderbird MCP を卒業 |
 | P2 | Tauri UI: アカウント一覧・スレッド表示・検索・タスク一覧 | ✅ 2026-09-03 |
-| P3 | 要約・タスク抽出（MCP経由とアプリ内API呼び出しの両方）、`create_draft`、UI で承認送信 | MVP 完成 |
+| P3-a | `apps/desktop/src/api/` を Tauri invoke に差し替え。アカウント登録ウィザード、同期の進捗イベント、実データのスレッド・一覧表示、設定モーダル | ✅ 2026-09-06 |
+| P3-b | 要約・タスク抽出（MCP経由とアプリ内API呼び出しの両方）、`create_draft`、UI で承認送信を実データに繋ぐ | MVP 完成 |
 | P4 | Gmail / M365 OAuth、Graph バックエンド、IMAP IDLE、過去分バックフィル | 案件アドレス増加に耐える |
 | P5 | 案件タグ横断ダッシュボード、日次ダイジェスト、Thunderbird からのインポート | 便利機能 |
 
@@ -142,3 +143,5 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 - Windows 以外（Mac/Linux）も最初から対象にするか
 - 要約に使うモデルとコスト上限（日次でいくらまで、など）
 - 案件終了後のアカウントの扱い（アーカイブして DB に残す／削除）
+- P1 で決める: MCP サーバをアプリ内でどう起動するか（stdio / HTTP）、
+  Claude Desktop / Cowork からどう見つけさせるか
