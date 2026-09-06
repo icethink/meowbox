@@ -85,7 +85,7 @@ export default function App() {
     void refreshAccounts();
   }
 
-  // 選択中のスレッドの詳細を読み直す
+  // 選択中のスレッドの詳細を読み直す。開いたスレッドの未読メッセージは既読にする
   useEffect(() => {
     if (!selectedThreadKey) {
       setSelected(null);
@@ -94,12 +94,29 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       const detail = await getThread(selectedThreadKey);
-      if (!cancelled) setSelected(detail);
+      if (cancelled) return;
+      setSelected(detail);
+
+      const unreadIds = detail?.messages.filter((m) => !m.is_read).map((m) => m.id) ?? [];
+      if (unreadIds.length === 0) return;
+      try {
+        await mark(unreadIds, 'read');
+        if (cancelled) return;
+        setSelected((prev) =>
+          prev && prev.thread_key === detail?.thread_key
+            ? { ...prev, messages: prev.messages.map((m) => ({ ...m, is_read: true })) }
+            : prev,
+        );
+        await refreshThreads();
+        await refreshViews();
+      } catch (err) {
+        console.error(err);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedThreadKey]);
+  }, [selectedThreadKey, refreshThreads, refreshViews]);
 
   const threadKeys = useMemo(() => threads.map((t) => t.thread_key), [threads]);
   useKeyboardShortcuts({ threadKeys, selectedThreadKey });

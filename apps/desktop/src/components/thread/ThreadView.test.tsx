@@ -23,6 +23,7 @@ function makeThread(overrides: Partial<ThreadDetail> = {}): ThreadDetail {
         quoted_text: '',
         attachments: [],
         is_latest: true,
+        is_read: false,
       },
     ],
     reply_placeholder: '山田さんへ返信…',

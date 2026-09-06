@@ -73,6 +73,7 @@ function messageDtoToView(
       size_label: formatFileSize(a.size),
     })),
     is_latest: isLatest,
+    is_read: m.is_read,
   };
 }
 

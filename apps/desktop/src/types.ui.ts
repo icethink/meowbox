@@ -96,6 +96,8 @@ export interface ThreadMessageView {
   attachments: AttachmentChip[];
   /** 最新の 1 通は本文を明るく出す */
   is_latest: boolean;
+  /** 既読かどうか。開いたスレッドを既読にするために使う */
+  is_read: boolean;
 }
 
 /** スレッド表示に必要な全部 */

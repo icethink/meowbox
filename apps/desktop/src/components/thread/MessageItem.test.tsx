@@ -21,6 +21,7 @@ const message: ThreadMessageView = {
   quoted_text: '',
   attachments: [{ id: 42, filename: '見積書.pdf', size_label: '18KB' }],
   is_latest: true,
+  is_read: true,
 };
 
 describe('MessageItem', () => {
