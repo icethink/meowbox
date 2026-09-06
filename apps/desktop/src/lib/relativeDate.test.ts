@@ -51,6 +51,35 @@ describe('formatRelativeDate', () => {
     const base = new Date(2026, 0, 1, 10, 0); // 2026-01-01
     expect(formatRelativeDate(new Date(2025, 11, 31, 20, 0).toISOString(), base)).toBe('昨日');
   });
+
+  it('timeZone を指定すると Asia/Tokyo の壁時計で表示する', () => {
+    // 2025-09-02T00:30:00Z は Asia/Tokyo では 2025-09-02 09:30。
+    const base = new Date('2025-09-02T10:00:00+09:00');
+    expect(formatRelativeDate('2025-09-02T00:30:00Z', base, 'Asia/Tokyo')).toBe('9:30');
+  });
+
+  it('timeZone に UTC を指定すると UTC の壁時計で表示する', () => {
+    const base = new Date('2025-09-02T10:00:00+09:00');
+    expect(formatRelativeDate('2025-09-02T00:30:00Z', base, 'UTC')).toBe('0:30');
+  });
+
+  it('日付境界をまたぐ場合、timeZone によって「今日」か「昨日」かが変わる', () => {
+    // 2025-09-01T15:30:00Z は UTC では 9/1 だが、Asia/Tokyo では 9/2 0:30。
+    const targetIso = '2025-09-01T15:30:00Z';
+    const base = new Date('2025-09-02T10:00:00+09:00'); // Asia/Tokyo の 9/2
+
+    expect(formatRelativeDate(targetIso, base, 'Asia/Tokyo')).toBe('0:30');
+    expect(formatRelativeDate(targetIso, base, 'UTC')).toBe('昨日');
+  });
+
+  it('壊れたタイムゾーン名でも例外を投げずローカル時刻にフォールバックする', () => {
+    expect(() =>
+      formatRelativeDate(new Date(2026, 8, 6, 9, 41).toISOString(), now, 'Not/AZone'),
+    ).not.toThrow();
+    expect(
+      typeof formatRelativeDate(new Date(2026, 8, 6, 9, 41).toISOString(), now, 'Not/AZone'),
+    ).toBe('string');
+  });
 });
 
 describe('formatMessageTime', () => {
@@ -72,6 +101,11 @@ describe('formatMessageTime', () => {
     expect(formatMessageTime(new Date(2025, 8, 1, 17, 20).toISOString(), now)).toBe(
       '2025/9/1 17:20',
     );
+  });
+
+  it('timeZone を指定すると Asia/Tokyo の壁時計で表示する', () => {
+    const base = new Date('2025-09-02T10:00:00+09:00');
+    expect(formatMessageTime('2025-09-02T00:30:00Z', base, 'Asia/Tokyo')).toBe('今日 9:30');
   });
 });
 
@@ -96,5 +130,11 @@ describe('formatDueDate', () => {
 
   it('不正な文字列は空文字列', () => {
     expect(formatDueDate('not a date', now)).toBe('');
+  });
+
+  it('timeZone を指定すると Asia/Tokyo の壁時計で「今日」判定する', () => {
+    // 2025-09-01T15:30:00Z は Asia/Tokyo では 2025-09-02。
+    const base = new Date('2025-09-02T10:00:00+09:00');
+    expect(formatDueDate('2025-09-01T15:30:00Z', base, 'Asia/Tokyo')).toBe('今日');
   });
 });
