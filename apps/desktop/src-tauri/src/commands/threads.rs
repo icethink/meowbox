@@ -413,6 +413,44 @@ pub fn extract_attachment(state: tauri::State<'_, AppState>, id: i64) -> Result<
     extract_attachment_impl(&store, &state.attachments_dir(), id)
 }
 
+/// `path` が `dir` の内側にあるかを確認する。両方を `canonicalize` してから
+/// `starts_with` で判定するので、`<dir>` と `<dir>-evil` のような文字列の
+/// 前方一致では通らない。`canonicalize` は実在するパスにしか使えないので、
+/// 呼び出し側は展開（書き出し）が終わった後に呼ぶこと。
+fn is_inside(dir: &Path, path: &Path) -> std::io::Result<bool> {
+    let dir = dir.canonicalize()?;
+    let path = path.canonicalize()?;
+    Ok(path.starts_with(&dir))
+}
+
+/// 添付を展開して OS の既定アプリで開く。パスは `attachments_dir` の内側で
+/// あることを必ず確認する（JS には添付 id だけを渡し、パスそのものは渡さない）。
+#[tauri::command]
+pub fn open_attachment(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: i64,
+) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let attachments_dir = state.attachments_dir();
+    let path = {
+        let store = state.store()?;
+        extract_attachment_impl(&store, &attachments_dir, id)?
+    };
+    let path = Path::new(&path);
+
+    match is_inside(&attachments_dir, path) {
+        Ok(true) => {}
+        Ok(false) => return Err(AppError::invalid_input("添付のパスが不正です")),
+        Err(_) => return Err(AppError::internal("添付を開けませんでした")),
+    }
+
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|_| AppError::internal("添付を開けませんでした"))
+}
+
 #[tauri::command]
 pub fn get_digest(
     state: tauri::State<'_, AppState>,
@@ -776,6 +814,39 @@ mod tests {
             .canonicalize()
             .unwrap()
             .starts_with(attachments_dir.canonicalize().unwrap()));
+    }
+
+    #[test]
+    fn is_inside_accepts_a_file_in_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let attachments_dir = dir.path().join("attachments");
+        fs::create_dir_all(&attachments_dir).unwrap();
+        let file = attachments_dir.join("note.txt");
+        fs::write(&file, "hi").unwrap();
+
+        assert!(is_inside(&attachments_dir, &file).unwrap());
+    }
+
+    #[test]
+    fn is_inside_rejects_a_sibling_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let attachments_dir = dir.path().join("attachments");
+        let evil_dir = dir.path().join("attachments-evil");
+        fs::create_dir_all(&attachments_dir).unwrap();
+        fs::create_dir_all(&evil_dir).unwrap();
+        let evil_file = evil_dir.join("note.txt");
+        fs::write(&evil_file, "hi").unwrap();
+
+        assert!(!is_inside(&attachments_dir, &evil_file).unwrap());
+    }
+
+    #[test]
+    fn is_inside_rejects_a_parent_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let attachments_dir = dir.path().join("attachments");
+        fs::create_dir_all(&attachments_dir).unwrap();
+
+        assert!(!is_inside(&attachments_dir, dir.path()).unwrap());
     }
 
     #[test]

@@ -29,6 +29,7 @@ fn resolve_data_dir(app: &tauri::App) -> anyhow::Result<PathBuf> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = resolve_data_dir(app)?;
             app.manage(AppState::new(data_dir)?);
@@ -47,6 +48,7 @@ pub fn run() {
             commands::threads::get_thread,
             commands::threads::get_message,
             commands::threads::extract_attachment,
+            commands::threads::open_attachment,
             commands::threads::get_digest,
             commands::threads::mark,
             commands::threads::view_counts,
