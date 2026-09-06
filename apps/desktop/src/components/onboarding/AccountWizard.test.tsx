@@ -94,4 +94,64 @@ describe('EmptyState + AccountWizard', () => {
 
     expect(await screen.findByText('数字で入力してください')).toBeInTheDocument();
   });
+
+  it('パスワードを入れてキャンセルで閉じ、再度開くとパスワード欄が空になっている', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+
+    await user.type(screen.getByLabelText('パスワード'), 'hunter2');
+    expect(screen.getByLabelText('パスワード')).toHaveValue('hunter2');
+
+    // モーダル外側のクリックでキャンセル相当（Modal の onClose）
+    await user.click(screen.getByRole('dialog').parentElement as HTMLElement);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+
+    expect(screen.getByLabelText('パスワード')).toHaveValue('');
+  });
+
+  it('パスワードを入れて Esc で閉じ、再度開くとパスワード欄が空になっている', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+
+    await user.type(screen.getByLabelText('パスワード'), 'hunter2');
+    expect(screen.getByLabelText('パスワード')).toHaveValue('hunter2');
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+
+    expect(screen.getByLabelText('パスワード')).toHaveValue('');
+  });
+
+  it('接続テストから完了まで進んだあと、開き直してもパスワード欄は空になっている', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+    await fillValidServerStep(user);
+    await user.click(screen.getByRole('button', { name: '接続テスト' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '次へ' })).toBeEnabled();
+    });
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+    await user.click(screen.getByRole('button', { name: '完了' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'アカウントを追加' }));
+    await user.click(screen.getByRole('button', { name: '次へ' }));
+
+    expect(screen.getByLabelText('パスワード')).toHaveValue('');
+  });
 });
