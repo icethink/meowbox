@@ -1,6 +1,6 @@
 //! `mailsync::parse::parse` の統合テスト。人工の `.eml` フィクスチャで検証する。
 
-use mailsync::parse::{parse, strip_quotes_and_signature, thread_key};
+use mailsync::parse::{attachment_bytes, parse, strip_quotes_and_signature, thread_key};
 
 const ISO2022JP_PLAIN: &[u8] = include_bytes!("fixtures/iso2022jp-plain.eml");
 const SHIFTJIS_PLAIN: &[u8] = include_bytes!("fixtures/shiftjis-plain.eml");
@@ -42,6 +42,27 @@ fn parses_attachment_mixed() {
     assert_eq!(p.attachments[0].filename, "notes.txt");
     assert_eq!(p.attachments[0].size, 14);
     assert!(p.body_text.contains("資料を添付します。"));
+}
+
+#[test]
+fn attachment_bytes_returns_the_attachment_body() {
+    let bytes = attachment_bytes(ATTACHMENT_MIXED, 0).expect("attachment should be found");
+    assert_eq!(bytes, b"meeting notes\n");
+}
+
+#[test]
+fn attachment_bytes_index_matches_parse_order() {
+    let p = parse(ATTACHMENT_MIXED).expect("parse should succeed");
+    for (i, meta) in p.attachments.iter().enumerate() {
+        let bytes = attachment_bytes(ATTACHMENT_MIXED, i).expect("attachment should be found");
+        assert_eq!(bytes.len(), meta.size);
+    }
+    assert_eq!(p.attachments[0].filename, "notes.txt");
+}
+
+#[test]
+fn attachment_bytes_out_of_range_is_error() {
+    assert!(attachment_bytes(ATTACHMENT_MIXED, 1).is_err());
 }
 
 #[test]

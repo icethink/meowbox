@@ -9,7 +9,9 @@
 //!   meowbox search "見積" --project 案件A --unread
 //!   meowbox show 42
 //!
-//! DB の場所は `--db` か `MEOWBOX_DB`、既定は `./data/meowbox.db`。
+//! データの置き場（DB・raw .eml・添付）は `--data-dir` か `MEOWBOX_DATA_DIR`、
+//! 既定は OS のアプリデータディレクトリ配下。DB のパスだけ変えたいときは
+//! `--db` か `MEOWBOX_DB` で上書きできる。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,9 +31,12 @@ use mailsync::imap::{save_password, ImapBackend, ImapConfig};
     about = "Meowbox — AI-friendly mail aggregator"
 )]
 struct Cli {
-    /// SQLite DB のパス
-    #[arg(long, env = "MEOWBOX_DB", default_value = "data/meowbox.db")]
-    db: PathBuf,
+    /// データの置き場（DB・raw .eml・添付）。既定は OS のアプリデータディレクトリ配下
+    #[arg(long, env = "MEOWBOX_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+    /// SQLite DB のパス。既定は <data-dir>/meowbox.db
+    #[arg(long, env = "MEOWBOX_DB")]
+    db: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -111,64 +116,6 @@ enum AccountsCmd {
     },
 }
 
-/// アカウントを同期できない理由。
-#[derive(Debug, PartialEq, Eq)]
-enum SkipReason {
-    /// `kind` が imap ではない（gmail / m365 は未対応）。
-    NotImap { kind: &'static str },
-    /// imap アカウントだが `settings.host` が無い。
-    NoHost,
-}
-
-impl SkipReason {
-    fn message(&self, account_id: mailcore::AccountId) -> String {
-        match self {
-            SkipReason::NotImap { kind } => {
-                format!("account #{account_id}: kind '{kind}' not supported yet")
-            }
-            SkipReason::NoHost => format!("account #{account_id}: has no host configured"),
-        }
-    }
-}
-
-/// アカウント設定から `ImapConfig` を組み立てる。同期できないアカウントは
-/// 飛ばす理由を返す。
-fn imap_config_from_account(a: &mailcore::Account) -> Result<ImapConfig, SkipReason> {
-    if a.kind != AccountKind::Imap {
-        return Err(SkipReason::NotImap {
-            kind: a.kind.as_str(),
-        });
-    }
-    let host = a
-        .settings
-        .get("host")
-        .and_then(|v| v.as_str())
-        .ok_or(SkipReason::NoHost)?;
-    let port = a
-        .settings
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(993) as u16;
-    let username = a
-        .settings
-        .get("username")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&a.email);
-    let starttls = a
-        .settings
-        .get("starttls")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    Ok(ImapConfig {
-        account_id: a.id,
-        host: host.to_string(),
-        port,
-        username: username.to_string(),
-        starttls,
-    })
-}
-
 /// `sync` サブコマンド 1 回分の集計（試行数・失敗数・スキップ数）。
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SyncOutcome {
@@ -218,14 +165,19 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    if let Some(parent) = cli.db.parent() {
+    let data_dir = mailstore::paths::resolve_data_dir(cli.data_dir.clone())?;
+    let db = cli
+        .db
+        .clone()
+        .unwrap_or_else(|| mailstore::paths::db_path(&data_dir));
+    if let Some(parent) = db.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    let store = Store::open(&cli.db).with_context(|| format!("open {}", cli.db.display()))?;
+    let store = Store::open(&db).with_context(|| format!("open {}", db.display()))?;
 
     match cli.cmd {
         Cmd::Init => {
-            println!("initialized {}", cli.db.display());
+            println!("initialized {}", db.display());
         }
         Cmd::Accounts { cmd } => match cmd {
             AccountsCmd::List => {
@@ -305,10 +257,10 @@ async fn main() -> Result<()> {
             let mut outcome = SyncOutcome::default();
 
             for a in targets {
-                let config = match imap_config_from_account(&a) {
+                let config = match ImapConfig::from_account(&a) {
                     Ok(config) => config,
-                    Err(reason) => {
-                        eprintln!("{}", reason.message(a.id));
+                    Err(err) => {
+                        eprintln!("account #{}: {err}", a.id);
                         outcome.skipped += 1;
                         continue;
                     }
@@ -318,7 +270,9 @@ async fn main() -> Result<()> {
                 let opts = SyncOptions {
                     only_folder: folder.clone(),
                     since: Some(since),
-                    data_dir: PathBuf::from("data/mail"),
+                    data_dir: mailstore::paths::mail_dir(&data_dir),
+                    // CLI は完了時のサマリだけ出す。
+                    progress: None,
                 };
 
                 outcome.attempted += 1;
@@ -418,8 +372,8 @@ mod tests {
     #[test]
     fn non_imap_account_is_skipped_as_not_imap() {
         let a = account(AccountKind::Gmail, serde_json::json!({}));
-        match imap_config_from_account(&a) {
-            Err(SkipReason::NotImap { kind }) => assert_eq!(kind, "gmail"),
+        match ImapConfig::from_account(&a) {
+            Err(mailsync::imap::ConfigError::NotImap { kind }) => assert_eq!(kind, "gmail"),
             other => panic!("expected NotImap, got {other:?}"),
         }
     }
@@ -427,10 +381,27 @@ mod tests {
     #[test]
     fn imap_account_without_host_is_skipped_as_no_host() {
         let a = account(AccountKind::Imap, serde_json::json!({}));
-        match imap_config_from_account(&a) {
-            Err(SkipReason::NoHost) => {}
+        match ImapConfig::from_account(&a) {
+            Err(mailsync::imap::ConfigError::NoHost) => {}
             other => panic!("expected NoHost, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn skip_reason_messages_match_the_documented_wording() {
+        let gmail = account(AccountKind::Gmail, serde_json::json!({}));
+        let err = ImapConfig::from_account(&gmail).unwrap_err();
+        assert_eq!(
+            format!("account #{}: {err}", gmail.id),
+            "account #1: kind 'gmail' not supported yet"
+        );
+
+        let no_host = account(AccountKind::Imap, serde_json::json!({}));
+        let err = ImapConfig::from_account(&no_host).unwrap_err();
+        assert_eq!(
+            format!("account #{}: {err}", no_host.id),
+            "account #1: has no host configured"
+        );
     }
 
     #[test]
@@ -444,7 +415,7 @@ mod tests {
                 "starttls": true,
             }),
         );
-        let config = imap_config_from_account(&a).unwrap();
+        let config = ImapConfig::from_account(&a).unwrap();
         assert_eq!(config.account_id, 1);
         assert_eq!(config.host, "imap.mail.example");
         assert_eq!(config.port, 143);
@@ -460,7 +431,7 @@ mod tests {
                 "host": "imap.mail.example",
             }),
         );
-        let config = imap_config_from_account(&a).unwrap();
+        let config = ImapConfig::from_account(&a).unwrap();
         assert_eq!(config.username, "me@mail.example");
     }
 
@@ -472,7 +443,7 @@ mod tests {
                 "host": "imap.mail.example",
             }),
         );
-        let config = imap_config_from_account(&a).unwrap();
+        let config = ImapConfig::from_account(&a).unwrap();
         assert_eq!(config.port, 993);
     }
 

@@ -72,9 +72,14 @@ export function ThreadRow({
           {rest}
         </span>
 
-        {thread.ai_snippet && (
+        {thread.ai_snippet ? (
           // Claude が付けた 1 行要約。人間が書いた本文と混ざらないよう --ai 系で出す
           <span className="truncate text-sm text-ai-muted">{thread.ai_snippet}</span>
+        ) : (
+          thread.snippet && (
+            // 要約がまだ無いときは本文の抜粋を出す。人間が書いた文章なので --ai は使わない
+            <span className="truncate text-sm text-muted">{thread.snippet}</span>
+          )
         )}
 
         <span className="mt-px flex items-center gap-[6px]">

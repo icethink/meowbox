@@ -105,6 +105,31 @@ pub struct MessageSummary {
     pub is_read: bool,
 }
 
+/// スレッド一覧の 1 行。DB の messages を thread_key で畳んだ結果。
+/// 本文は含めない（一覧は軽量に保つ）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadSummary {
+    pub thread_key: String,
+    /// 最新メッセージのアカウント
+    pub account_id: AccountId,
+    pub project_tag: Option<String>,
+    /// 最新メッセージの id
+    pub latest_message_id: MessageId,
+    /// 最新メッセージの件名
+    pub subject: String,
+    /// 最新メッセージの差出人
+    pub from: Address,
+    pub snippet: String,
+    /// 最新メッセージの日時
+    pub last_date: DateTime<Utc>,
+    pub message_count: i64,
+    pub unread_count: i64,
+    /// スレッド内に 1 通でも添付があれば true
+    pub has_attachments: bool,
+    /// スレッド内に 1 通でもフラグがあれば true
+    pub is_flagged: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {

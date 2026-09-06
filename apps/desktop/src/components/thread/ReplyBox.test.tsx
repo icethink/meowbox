@@ -1,63 +1,106 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useAppStore } from '../../store/app';
-import { ReplyBox } from './ReplyBox';
 
-function setup() {
-  return render(<ReplyBox threadKey="th-estimate" placeholder="山田さんへ返信…" />);
+/**
+ * VITE_MEOWBOX_MOCK=1 なので実体は `mock.ts`。`sendAvailable` は false・
+ * `aiDraftAvailable` は true のまま、呼び出しだけ検証できるよう vi.fn で包む。
+ */
+vi.mock('../../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api')>();
+  return {
+    ...actual,
+    createDraft: vi.fn(actual.createDraft),
+    generateAiDraft: vi.fn(actual.generateAiDraft),
+    sendDraft: vi.fn(actual.sendDraft),
+  };
+});
+
+const { createDraft, sendDraft } = await import('../../api');
+const { ReplyBox } = await import('./ReplyBox');
+
+function setup(inReplyTo: number | null = 1) {
+  return render(
+    <ReplyBox threadKey="th-estimate" placeholder="山田さんへ返信…" inReplyTo={inReplyTo} />,
+  );
 }
 
 describe('ReplyBox', () => {
   beforeEach(() => {
     useAppStore.setState({ replyBody: '', replyIsUneditedAiDraft: false, toast: null });
+    vi.mocked(createDraft).mockClear();
+    vi.mocked(sendDraft).mockClear();
   });
 
-  it('AI の下書きを一度も編集せずに送ろうとしたら確認ダイアログを出す', async () => {
+  it('送信は未対応なので「確認して送信」は disabled で、押しても sendDraft は呼ばれず「送信しました」は出ない', async () => {
     setup();
+    await userEvent.type(screen.getByRole('textbox', { name: '返信本文' }), 'こんにちは');
 
-    await userEvent.click(screen.getByRole('button', { name: /AI で下書き/ }));
-    const input = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: '返信本文' });
-    expect(input.value).toContain('山田様');
+    const sendButton = screen.getByRole('button', { name: '確認して送信' });
+    expect(sendButton).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('button', { name: '確認して送信' }));
+    await userEvent.click(sendButton);
 
-    expect(
-      await screen.findByRole('heading', { name: 'AI の下書きをそのまま送信しますか？' }),
-    ).toBeInTheDocument();
-    // ダイアログを出しただけで送信はしていない
-    expect(useAppStore.getState().toast).toBeNull();
+    expect(sendDraft).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast).not.toBe('送信しました');
+    expect(screen.getByText('送信は未対応です（下書きの保存まで）')).toBeInTheDocument();
   });
 
-  it('人間が本文を編集していれば確認ダイアログは出さずに送る', async () => {
-    setup();
-
-    await userEvent.click(screen.getByRole('button', { name: /AI で下書き/ }));
+  it('「下書きを保存」を押すと本文と in_reply_to つきで createDraft が呼ばれる', async () => {
+    setup(42);
     await userEvent.type(screen.getByRole('textbox', { name: '返信本文' }), '追記します。');
 
-    await userEvent.click(screen.getByRole('button', { name: '確認して送信' }));
+    await userEvent.click(screen.getByRole('button', { name: '下書きを保存' }));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(useAppStore.getState().toast).toBe('送信しました');
-    expect(useAppStore.getState().replyBody).toBe('');
+    expect(createDraft).toHaveBeenCalledWith({ in_reply_to: 42, body: '追記します。' });
+    await vi.waitFor(() => {
+      expect(useAppStore.getState().toast).toBe('下書きを保存しました');
+    });
   });
 
-  it('確認ダイアログで「このまま送信」を押せば送信できる', async () => {
+  it('inReplyTo が null のとき「下書きを保存」は disabled', async () => {
+    setup(null);
+    await userEvent.type(screen.getByRole('textbox', { name: '返信本文' }), 'こんにちは');
+
+    expect(screen.getByRole('button', { name: '下書きを保存' })).toBeDisabled();
+  });
+
+  it('本文が空白のみのときは「下書きを保存」を押しても createDraft は呼ばれない', async () => {
+    setup(1);
+    await userEvent.type(screen.getByRole('textbox', { name: '返信本文' }), '   ');
+
+    expect(screen.getByRole('button', { name: '下書きを保存' })).toBeDisabled();
+    expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('AI で下書きを挿入すると本文に反映される（送信は未対応のまま）', async () => {
     setup();
 
     await userEvent.click(screen.getByRole('button', { name: /AI で下書き/ }));
-    await userEvent.click(screen.getByRole('button', { name: '確認して送信' }));
-    await userEvent.click(await screen.findByRole('button', { name: 'このまま送信' }));
 
-    expect(useAppStore.getState().toast).toBe('送信しました');
+    const input = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: '返信本文' });
+    expect(input.value).toContain('山田様');
+    expect(screen.getByRole('button', { name: '確認して送信' })).toBeDisabled();
   });
+});
 
-  it('本文が空なら何も起きない', async () => {
-    setup();
+describe('ReplyBox (aiDraftAvailable = false)', () => {
+  it('Claude の下書きが使えないときは「AI で下書き」が disabled', async () => {
+    vi.resetModules();
+    vi.doMock('../../api', () => ({
+      createDraft: vi.fn(),
+      generateAiDraft: vi.fn(),
+      sendDraft: vi.fn(),
+      sendAvailable: false,
+      aiDraftAvailable: false,
+    }));
 
-    await userEvent.click(screen.getByRole('button', { name: '確認して送信' }));
+    const { ReplyBox: ReplyBoxAiOff } = await import('./ReplyBox');
+    render(<ReplyBoxAiOff threadKey="th-estimate" placeholder="山田さんへ返信…" inReplyTo={1} />);
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(useAppStore.getState().toast).toBeNull();
+    const button = screen.getByRole('button', { name: /AI で下書き/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', 'Claude の下書きは P1 で対応');
   });
 });

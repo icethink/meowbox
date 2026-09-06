@@ -19,7 +19,8 @@ crates/mailstore  SQLite（rusqlite bundled, FTS5 trigram）
 crates/mailsync   IMAP/Gmail/Graph バックエンド + MIME パース + 同期エンジン
 crates/mailmcp    MCP サーバ（rmcp 予定）
 crates/mailcli    `meowbox` バイナリ。UI/MCP なしで動くデバッグ入口
-apps/desktop      Tauri v2 + React + TypeScript + Tailwind v4（pnpm）
+apps/desktop      Tauri v2 + React + TypeScript + Tailwind v4（pnpm）。
+                  `src-tauri/commands/` に Tauri コマンド、`src-tauri/state.rs` に `AppState`
 ```
 依存方向は **core ← store ← sync ← (mcp, cli, desktop)**。逆流させない。
 
@@ -29,6 +30,12 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p mailcli -- accounts list
+
+# デスクトップ（apps/desktop 配下）
+cd apps/desktop && pnpm test
+cd apps/desktop && pnpm lint
+cd apps/desktop && pnpm typecheck
+cd apps/desktop && pnpm build
 ```
 テストは `cargo test` が全部通る状態を維持する。新しい機能は必ず最低 1 本テストを付ける。
 
@@ -37,7 +44,9 @@ cargo run -p mailcli -- accounts list
 2. **秘密情報を DB / ログ / settings_json に書かない。** パスワード・トークンは `keyring`。
 3. **MCP ツールは AI が使いやすい粒度で。** 1 通ずつ取らせない。スレッド・ダイジェスト単位で返す。
    返り値は軽量（`MessageSummary`）。本文は `get_thread` / `get_message` のときだけ。
-4. **raw .eml は必ずファイルにも保存する**（`data/mail/<account>/<folder>/<uid>.eml`）。
+4. **raw .eml は必ずファイルにも保存する**（`<data_dir>/mail/<account_id>/<folder>/<uid>.eml`）。
+   `data_dir` の既定は OS のアプリデータディレクトリ配下（Windows なら `%APPDATA%\dev.icethink.meowbox\`）。
+   `MEOWBOX_DATA_DIR` で上書きできる。
    MCP が落ちていても Claude がファイルとして読める保険。
 5. **スキーマ変更は `schema.sql` + `SCHEMA_VERSION` + マイグレーション** の 3 点セット。
 6. 日本語メールが前提。ISO-2022-JP / Shift_JIS のデコード、trigram FTS を壊さない。
@@ -49,20 +58,22 @@ cargo run -p mailcli -- accounts list
    同じ名前を使わない。両方あると `text-<name>` が色として解決される。
    文字サイズを足したら `--text-<name>--line-height` も必ず一緒に指定する。
 10. UI から DB / IPC を直接叩かない。データ取得は `apps/desktop/src/api/` の関数だけを通す。
+11. UI に出す表示用の文字列（相対時刻・「今日」の境界）は Rust 側で作らない。
+    API は RFC 3339 の日時だけを返し、`src/lib/relativeDate.ts` が組み立てる。
 
 ## 現在のフェーズと次の一手
-P0-b まで完了。次は P3。P1 の MCP は実データが入ってから着手する。
+P3-a まで完了。次は P1。
 - [x] P0-a: workspace 雛形、スキーマ、`meowbox init / accounts / search`
 - [x] P2: Tauri UI（AppShell / Sidebar / ThreadList / ThreadView / DigestPanel、
       キーボード操作、モックデータ）— 2026-09-03
 - [x] P0-b: `mailsync::imap` を async-imap で実装、`parse` を mail-parser で実装、`meowbox sync` を動かす
       （最初のターゲット: 汎用 IMAP 1 アカウント、INBOX の直近 90 日）
       normalize_subject に RE: / Re[2]: / FW: / 返信：（全角）などを含むテストを追加する — 2026-09-04
-- [ ] P3: `apps/desktop/src/api/` のモックを Tauri invoke → mailstore に差し替える。
-      `listAccounts / listProjects / listThreads / getThread / getDigest / createDraft` を
-      `#[tauri::command]` として `src-tauri` に実装し、UI 側は `src/api/` の中身だけを
-      `invoke()` に置き換える（コンポーネントには触らない）。
-      あわせて要約・タスク抽出・下書き生成・承認送信を実データに繋ぐ
+- [x] P3-a: `apps/desktop/src/api/` のモックを Tauri invoke → mailstore に差し替えた。
+      アカウント登録ウィザード（種別 → サーバー設定 + 接続テスト → 案件タグ）、
+      同期の進捗イベント（`sync://progress`）、スレッド・一覧の実データ表示、
+      アカウントの再同期・削除ができる設定モーダルを実装した — 2026-09-06
+- [ ] P3-b: 要約・タスク抽出・下書き生成・承認送信を実データに繋ぐ
 - [ ] P1: `mailmcp` を rmcp で実装（list_accounts / search_messages / get_thread / inbox_digest）
       → Claude Desktop / Cowork から叩けることを確認したら Thunderbird MCP を卒業
 - [ ] P4: Gmail / M365 OAuth、IDLE、バックフィル

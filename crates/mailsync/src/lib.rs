@@ -8,5 +8,6 @@
 //! 現状はスケルトン。`MailBackend` トレイトは mailcore にある。
 
 pub mod engine;
+pub mod fsname;
 pub mod imap;
 pub mod parse;

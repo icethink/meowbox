@@ -3,6 +3,27 @@ import type { AiSummary } from '../../types.ui';
 import { RichText } from './RichText';
 
 /**
+ * 要約がまだ無いときのプレースホルダ。P1 で Claude が MCP 経由で書き込む。
+ * `AiSummaryCard` と同じ枠組みだが、より薄い見た目にして「まだ何もない」ことを示す。
+ * 生成する経路がまだ無いので「再生成」ボタンは置かない。
+ */
+export function AiSummaryEmpty() {
+  return (
+    <section className="flex flex-col gap-[8px] rounded-md border border-ai-line bg-ai-bg px-[14px] py-[12px]">
+      <header className="flex items-center gap-[8px]">
+        <span className="size-[6px] shrink-0 rounded-full bg-ai" aria-hidden="true" />
+        <h3 className="text-11 font-bold tracking-w4 text-ai">Claude による要約</h3>
+      </header>
+      <p className="text-base leading-loose text-ai-text-muted">
+        要約はまだありません
+        <br />
+        <span className="text-xs text-faint">Claude が MCP 経由で書き込むとここに出ます</span>
+      </p>
+    </section>
+  );
+}
+
+/**
  * Claude が作った要約。人間が書いた本文と取り違えないよう、
  * 面・枠・文字色をすべて --ai 系に寄せ、見出しに生成元と生成時刻を出す。
  */
@@ -10,9 +31,11 @@ export function AiSummaryCard({
   summary,
   onRegenerate,
 }: {
-  summary: AiSummary;
+  summary: AiSummary | null;
   onRegenerate?: () => void;
 }) {
+  if (!summary) return <AiSummaryEmpty />;
+
   return (
     <section className="flex flex-col gap-[8px] rounded-md border border-ai-line bg-ai-bg px-[14px] py-[12px]">
       <header className="flex items-center gap-[8px]">

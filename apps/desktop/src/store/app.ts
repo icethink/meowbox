@@ -15,6 +15,10 @@ interface AppState {
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
 
+  /** アカウント追加ウィザード */
+  accountWizardOpen: boolean;
+  setAccountWizardOpen: (open: boolean) => void;
+
   // --- 選択 ---
   selectedThreadKey: string | null;
   selectThread: (key: string) => void;
@@ -24,12 +28,14 @@ interface AppState {
   setActiveProjectTag: (tag: string | null) => void;
 
   // --- 一覧の状態 ---
+  // 既読・アーカイブは実データでは DB（サーバ）側の状態。ここに残っているのは
+  // useKeyboardShortcuts（e キー）がまだ参照しているため。一覧の表示自体は
+  // API から読み直した結果をそのまま使う。
   /** e でアーカイブしたスレッド。一覧から消えるだけで消去はしない */
   archivedKeys: string[];
   archiveThread: (key: string) => void;
   /** 開いたスレッドは既読にする */
   readKeys: string[];
-  markRead: (key: string) => void;
 
   // --- タスク ---
   taskDecisions: Record<number, TaskDecision>;
@@ -57,8 +63,11 @@ export const useAppStore = create<AppState>((set) => ({
   commandPaletteOpen: false,
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
 
-  // デザインでは「Re: 見積の件」が選択されている
-  selectedThreadKey: 'th-estimate',
+  accountWizardOpen: false,
+  setAccountWizardOpen: (open) => set({ accountWizardOpen: open }),
+
+  // 実データでは起動直後は何も選択しない（一覧の先頭が決まっていないため）
+  selectedThreadKey: null,
   selectThread: (key) =>
     set((s) => ({
       selectedThreadKey: key,
@@ -78,8 +87,6 @@ export const useAppStore = create<AppState>((set) => ({
       archivedKeys: s.archivedKeys.includes(key) ? s.archivedKeys : [...s.archivedKeys, key],
     })),
   readKeys: [],
-  markRead: (key) =>
-    set((s) => ({ readKeys: s.readKeys.includes(key) ? s.readKeys : [...s.readKeys, key] })),
 
   taskDecisions: {},
   decideTask: (id, decision) =>

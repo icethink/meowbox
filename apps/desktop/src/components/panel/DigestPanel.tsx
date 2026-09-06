@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { mockDigest } from '../../mock/digest';
-import type { DigestItem } from '../../types.ui';
+import { getDigest } from '../../api';
+import type { Digest, DigestItem } from '../../types.ui';
 import { useAppStore } from '../../store/app';
 import { Checkbox } from '../ui/Checkbox';
 import { RichText } from '../thread/RichText';
@@ -54,6 +55,24 @@ function DigestRow({ item }: { item: DigestItem }) {
 
 export function DigestPanel() {
   const close = useAppStore((s) => s.setRightPanelOpen);
+  const [digest, setDigest] = useState<Digest | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const result = await getDigest();
+        setDigest(result);
+      } catch (err) {
+        // 本文やアドレスをログに出さないよう、エラーだけ記録して空状態にする
+        console.error('failed to load digest', err);
+        setDigest(null);
+      } finally {
+        setLoading(false);
+      }
+    }
+    void load();
+  }, []);
 
   return (
     <aside
@@ -62,7 +81,7 @@ export function DigestPanel() {
     >
       <header className="flex items-center gap-[8px] border-b border-line px-[16px] pt-[14px] pb-[10px]">
         <h2 className="text-md font-bold">今日のダイジェスト</h2>
-        <span className="font-mono text-2xs text-faint">{mockDigest.date_label}</span>
+        <span className="font-mono text-2xs text-faint">{digest?.date_label ?? ''}</span>
         <button
           type="button"
           aria-label="ダイジェストを閉じる"
@@ -73,31 +92,51 @@ export function DigestPanel() {
         </button>
       </header>
 
-      <div className="flex flex-col gap-[8px] px-[12px] pt-[12px] pb-[4px]">
-        {/* Claude が書いたまとめ。人間が書いたものと混ざらないよう --ai の面に載せる */}
-        <section className="flex flex-col gap-[5px] rounded-[7px] border border-ai-line bg-ai-bg px-[12px] py-[10px]">
-          <h3 className="flex items-center gap-[6px] text-xs font-bold text-ai">
-            <span className="size-[5px] shrink-0 rounded-full bg-ai" aria-hidden="true" />
-            Claude のまとめ
-          </h3>
-          <p className="selectable text-sm leading-relaxed text-ai-text-muted">
-            <RichText spans={mockDigest.summary} strongClassName="font-medium text-ai-text" />
-          </p>
-        </section>
-      </div>
+      {loading ? (
+        <p className="px-[16px] py-[12px] text-xs text-faint">読み込み中…</p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-[8px] px-[12px] pt-[12px] pb-[4px]">
+            {/* Claude が書いたまとめ。人間が書いたものと混ざらないよう --ai の面に載せる */}
+            <section className="flex flex-col gap-[5px] rounded-[7px] border border-ai-line bg-ai-bg px-[12px] py-[10px]">
+              <h3 className="flex items-center gap-[6px] text-xs font-bold text-ai">
+                <span className="size-[5px] shrink-0 rounded-full bg-ai" aria-hidden="true" />
+                Claude のまとめ
+              </h3>
+              {digest && digest.summary.length > 0 ? (
+                <p className="selectable text-sm leading-relaxed text-ai-text-muted">
+                  <RichText spans={digest.summary} strongClassName="font-medium text-ai-text" />
+                </p>
+              ) : (
+                <p className="text-sm leading-relaxed text-ai-text-muted">
+                  今日のまとめはまだありません
+                  <br />
+                  <span className="text-xs text-faint">
+                    Claude が MCP 経由で書き込むとここに出ます
+                  </span>
+                </p>
+              )}
+            </section>
+          </div>
 
-      <div className="flex flex-col gap-[14px] px-[12px] pt-[8px] pb-[16px]">
-        {mockDigest.groups.map((group) => (
-          <section key={group.project_tag} className="flex flex-col gap-[5px]">
-            <h3 className="px-[2px] text-xs font-medium tracking-caps text-faint">
-              {group.project_tag}
-            </h3>
-            {group.items.map((item) => (
-              <DigestRow key={item.id} item={item} />
-            ))}
-          </section>
-        ))}
-      </div>
+          <div className="flex flex-col gap-[14px] px-[12px] pt-[8px] pb-[16px]">
+            {digest && digest.groups.length > 0 ? (
+              digest.groups.map((group) => (
+                <section key={group.project_tag} className="flex flex-col gap-[5px]">
+                  <h3 className="px-[2px] text-xs font-medium tracking-caps text-faint">
+                    {group.project_tag}
+                  </h3>
+                  {group.items.map((item) => (
+                    <DigestRow key={item.id} item={item} />
+                  ))}
+                </section>
+              ))
+            ) : (
+              <p className="px-[2px] text-xs text-faint">抽出されたタスクはありません</p>
+            )}
+          </div>
+        </>
+      )}
     </aside>
   );
 }

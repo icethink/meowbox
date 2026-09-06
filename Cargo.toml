@@ -30,9 +30,11 @@ async-trait = "0.1"
 mail-parser = { version = "0.11.8", features = ["full_encoding"] }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
+tauri-plugin-opener = "2"
 async-imap = { version = "0.11.3", default-features = false, features = ["runtime-tokio"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12", "logging"] }
 webpki-roots = "1.0.9"
 futures = "0.3.34"
 keyring = "4.2.0"
 rpassword = "7.5.4"
+dirs = "6"
