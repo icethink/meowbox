@@ -2,14 +2,31 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsModal } from './SettingsModal';
-import { deleteAccount, listAccounts, syncAccount } from '../../api';
+import { deleteAccount, listAccounts, mcpIntegration, syncAccount } from '../../api';
 import type { Account } from '../../types';
+import type { McpIntegration } from '../../types.api';
 
 vi.mock('../../api', () => ({
   listAccounts: vi.fn(),
   deleteAccount: vi.fn(),
   syncAccount: vi.fn(),
+  mcpIntegration: vi.fn(),
 }));
+
+const mcp: McpIntegration = {
+  server_path: 'C:\\Program Files\\Meowbox\\meowbox-mcp.exe',
+  server_exists: true,
+  desktop_config_json: JSON.stringify(
+    {
+      mcpServers: {
+        meowbox: { command: 'C:\\Program Files\\Meowbox\\meowbox-mcp.exe', args: [] },
+      },
+    },
+    null,
+    2,
+  ),
+  claude_code_command: 'claude mcp add meowbox -- "C:\\Program Files\\Meowbox\\meowbox-mcp.exe"',
+};
 
 const accounts: Account[] = [
   {
@@ -37,6 +54,7 @@ describe('SettingsModal', () => {
     vi.mocked(listAccounts).mockReset().mockResolvedValue(accounts);
     vi.mocked(deleteAccount).mockReset().mockResolvedValue(undefined);
     vi.mocked(syncAccount).mockReset().mockResolvedValue(undefined);
+    vi.mocked(mcpIntegration).mockReset().mockResolvedValue(mcp);
   });
 
   it('アカウント一覧が表示される', async () => {
@@ -98,5 +116,46 @@ describe('SettingsModal', () => {
     await waitFor(() => {
       expect(syncAccount).toHaveBeenCalledWith(1);
     });
+  });
+
+  it('「Claude 連携」の節が表示され、claude mcp add コマンドが出る', async () => {
+    render(<SettingsModal open onClose={() => {}} onChanged={() => {}} />);
+
+    expect(await screen.findByText('Claude 連携')).toBeInTheDocument();
+    expect(screen.getByText(/claude mcp add meowbox/)).toBeInTheDocument();
+  });
+
+  it('「コピー」を押すと navigator.clipboard.writeText が呼ばれる', async () => {
+    // userEvent.setup() は独自の clipboard スタブを navigator.clipboard に付け替えるので、
+    // それより後に上書きする（先にやると setup() 側の getter に上書きされてしまう）
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+
+    render(<SettingsModal open onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByText('Claude 連携');
+
+    const copyButtons = screen.getAllByRole('button', { name: 'コピー' });
+    await user.click(copyButtons[0]!);
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(mcp.desktop_config_json);
+    });
+
+    await user.click(copyButtons[1]!);
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(mcp.claude_code_command);
+    });
+  });
+
+  it('server_exists が false のとき警告文が出る', async () => {
+    vi.mocked(mcpIntegration).mockResolvedValue({ ...mcp, server_exists: false });
+
+    render(<SettingsModal open onClose={() => {}} onChanged={() => {}} />);
+
+    expect(await screen.findByText(/meowbox-mcp が見つかりません/)).toBeInTheDocument();
   });
 });

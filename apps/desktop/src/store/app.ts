@@ -19,6 +19,10 @@ interface AppState {
   accountWizardOpen: boolean;
   setAccountWizardOpen: (open: boolean) => void;
 
+  /** 60 秒ごとに自動で読み直す。既定オフ（Claude が書き込んだものを拾うための保険） */
+  autoRefresh: boolean;
+  setAutoRefresh: (on: boolean) => void;
+
   // --- 選択 ---
   selectedThreadKey: string | null;
   selectThread: (key: string) => void;
@@ -65,6 +69,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   accountWizardOpen: false,
   setAccountWizardOpen: (open) => set({ accountWizardOpen: open }),
+
+  autoRefresh: false,
+  setAutoRefresh: (on) => set({ autoRefresh: on }),
 
   // 実データでは起動直後は何も選択しない（一覧の先頭が決まっていないため）
   selectedThreadKey: null,

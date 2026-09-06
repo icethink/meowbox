@@ -7,6 +7,7 @@ import type { Account } from '../types';
 import type {
   DraftDto,
   LastSync,
+  McpIntegration,
   MessageDto,
   NewAccountInput,
   NewDraftInput,
@@ -73,6 +74,21 @@ export async function listProjects(): Promise<ProjectGroupView[]> {
 
 export async function listViews(): Promise<ViewItemView[]> {
   return mockViews;
+}
+
+/** 実在しないパスの一般的な例（開発者の実パスは書かない） */
+export async function mcpIntegration(): Promise<McpIntegration> {
+  const serverPath = 'C:\\Program Files\\Meowbox\\meowbox-mcp.exe';
+  return {
+    server_path: serverPath,
+    server_exists: true,
+    desktop_config_json: JSON.stringify(
+      { mcpServers: { meowbox: { command: serverPath, args: [] } } },
+      null,
+      2,
+    ),
+    claude_code_command: `claude mcp add meowbox -- "${serverPath}"`,
+  };
 }
 
 export async function getSyncStatus(): Promise<{
@@ -198,6 +214,7 @@ export const mockApi = {
   deleteAccount,
   listProjects,
   listViews,
+  mcpIntegration,
   listThreads,
   getThread,
   getMessage,

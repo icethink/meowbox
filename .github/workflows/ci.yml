@@ -41,6 +41,15 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
+      # tauri.conf.json の externalBin が実体を要求するため、src-tauri を含む
+      # cargo コマンドの前に sidecar を用意する。ここは clippy / test と同じ
+      # debug プロファイルで足りる（中身は使わず、存在すればよい）。
+      - name: Build the MCP sidecar
+        run: cargo build -p mailmcp
+
+      - name: Place the MCP sidecar
+        run: node apps/desktop/scripts/copy-mcp-sidecar.mjs
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
@@ -112,6 +121,17 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
         working-directory: apps/desktop
+
+      # tauri build の前に sidecar を用意する。tauri.conf.json の
+      # beforeBuildCommand でも `pnpm mcp:build && pnpm mcp:sidecar` を
+      # 走らせているので二重になるが、cargo / cache が効くので実害は無い。
+      # beforeBuildCommand 側は手元で `pnpm tauri build` だけ叩いたときに
+      # 動かすために必要なので、ここで用意しても消さない。
+      - name: Build the MCP sidecar
+        run: cargo build --release -p mailmcp
+
+      - name: Place the MCP sidecar
+        run: node apps/desktop/scripts/copy-mcp-sidecar.mjs
 
       - name: tauri build
         run: pnpm tauri build --no-bundle

@@ -17,7 +17,7 @@ Meowbox は Rust 製の AI フレンドリーなメーラー。案件ごとに�
 crates/mailcore   ドメイン型・トレイト。I/O 禁止・UI 禁止・DB 禁止
 crates/mailstore  SQLite（rusqlite bundled, FTS5 trigram）
 crates/mailsync   IMAP/Gmail/Graph バックエンド + MIME パース + 同期エンジン
-crates/mailmcp    MCP サーバ（rmcp 予定）
+crates/mailmcp    MCP サーバ。`meowbox-mcp` バイナリ（rmcp、stdio）。実装済み
 crates/mailcli    `meowbox` バイナリ。UI/MCP なしで動くデバッグ入口
 apps/desktop      Tauri v2 + React + TypeScript + Tailwind v4（pnpm）。
                   `src-tauri/commands/` に Tauri コマンド、`src-tauri/state.rs` に `AppState`
@@ -30,6 +30,7 @@ cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p mailcli -- accounts list
+cargo run -p mailmcp --bin meowbox-mcp
 
 # デスクトップ（apps/desktop 配下）
 cd apps/desktop && pnpm test
@@ -37,6 +38,9 @@ cd apps/desktop && pnpm lint
 cd apps/desktop && pnpm typecheck
 cd apps/desktop && pnpm build
 ```
+`src-tauri` を含む cargo コマンド（`cargo clippy --workspace` / `cargo test --workspace` など）の前には
+`pnpm mcp:build && pnpm mcp:sidecar` が要る。externalBin の実体が無いと build.rs が落ちるため。
+
 テストは `cargo test` が全部通る状態を維持する。新しい機能は必ず最低 1 本テストを付ける。
 
 ## 守ること
@@ -60,9 +64,11 @@ cd apps/desktop && pnpm build
 10. UI から DB / IPC を直接叩かない。データ取得は `apps/desktop/src/api/` の関数だけを通す。
 11. UI に出す表示用の文字列（相対時刻・「今日」の境界）は Rust 側で作らない。
     API は RFC 3339 の日時だけを返し、`src/lib/relativeDate.ts` が組み立てる。
+12. **MCP に送信ツールと `mark` を出さない。** Claude が書けるのは要約・タスク・下書きだけ。
+    アカウントの接続設定（host / port / username）とパスワードは MCP の返り値に含めない。
 
 ## 現在のフェーズと次の一手
-P3-a まで完了。次は P1。
+P1 まで完了。次は P3-b / P4 / P6。
 - [x] P0-a: workspace 雛形、スキーマ、`meowbox init / accounts / search`
 - [x] P2: Tauri UI（AppShell / Sidebar / ThreadList / ThreadView / DigestPanel、
       キーボード操作、モックデータ）— 2026-09-03
@@ -73,9 +79,13 @@ P3-a まで完了。次は P1。
       アカウント登録ウィザード（種別 → サーバー設定 + 接続テスト → 案件タグ）、
       同期の進捗イベント（`sync://progress`）、スレッド・一覧の実データ表示、
       アカウントの再同期・削除ができる設定モーダルを実装した — 2026-09-06
+- [x] P1: `mailmcp` を rmcp で実装し、`meowbox-mcp` を独立 stdio バイナリとして配布
+      （`bundle.externalBin`）。ツールは list_accounts / list_projects /
+      search_messages / get_thread / get_message / get_attachment / inbox_digest /
+      save_summary / upsert_tasks / list_tasks / create_draft の 11 個。送信系と
+      `mark` は出さない。設定モーダルの「Claude 連携」節から登録用の JSON /
+      コマンドをコピーできる — 2026-09-06
 - [ ] P3-b: 要約・タスク抽出・下書き生成・承認送信を実データに繋ぐ
-- [ ] P1: `mailmcp` を rmcp で実装（list_accounts / search_messages / get_thread / inbox_digest）
-      → Claude Desktop / Cowork から叩けることを確認したら Thunderbird MCP を卒業
 - [ ] P4: Gmail / M365 OAuth、IDLE、バックフィル
 
 ## 追加予定の主要クレート

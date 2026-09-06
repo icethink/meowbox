@@ -28,7 +28,9 @@ pub struct AppState {
     /// spawn したバックグラウンドタスクに持ち込むため `Arc` で共有する。
     pub syncing: Arc<Mutex<HashSet<i64>>>,
     /// 直近の同期結果。アカウント id → 結果。プロセスを再起動すると消える。
-    /// TODO(P3-b): meta テーブルに永続化して再起動後も「N 分前に同期」を出す。
+    /// 成功時刻自体は `commands::sync::record_synced_at` が `meta` テーブルにも
+    /// 書いており、別プロセス（MCP サーバなど）はそちらを読む。ここはあくまで
+    /// UI（`sync_status` コマンド）用の、件数・エラーまで含めた即時表示用のキャッシュ。
     pub last_sync: Arc<Mutex<HashMap<i64, LastSync>>>,
 }
 

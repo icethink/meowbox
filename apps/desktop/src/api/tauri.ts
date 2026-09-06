@@ -25,6 +25,7 @@ import type {
   DigestDto,
   DraftDto,
   LastSync,
+  McpIntegration,
   MessageDto,
   NewAccountInput,
   NewDraftInput,
@@ -107,6 +108,11 @@ function projectSyncState(group: ProjectGroup, syncMap: Record<number, LastSync>
 export async function listViews(): Promise<ViewItemView[]> {
   const counts = await invoke<ViewCountsDto>('view_counts');
   return viewCountsToViews(counts);
+}
+
+/** Claude Desktop / Claude Code に meowbox-mcp を登録するためのコピペ用情報 */
+export async function mcpIntegration(): Promise<McpIntegration> {
+  return invoke<McpIntegration>('mcp_integration');
 }
 
 export async function listThreads(query: ThreadQuery = {}): Promise<ThreadListItem[]> {
@@ -282,6 +288,7 @@ export const tauriApi = {
   deleteAccount,
   listProjects,
   listViews,
+  mcpIntegration,
   listThreads,
   getThread,
   getMessage,

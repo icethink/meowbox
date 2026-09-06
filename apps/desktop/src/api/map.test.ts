@@ -50,6 +50,7 @@ describe('threadSummaryToListItem', () => {
     const item = threadSummaryToListItem(
       makeThreadSummary({ last_date: '2025-09-02T00:30:00Z' }),
       NOW,
+      'Asia/Tokyo',
     );
     expect(item.time_label).toBe('9:30');
   });

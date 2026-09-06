@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getSyncStatus, listAccounts, listProjects, listViews, onSyncProgress } from '../../api';
+import { useRefreshOnFocus } from '../../hooks/useRefreshOnFocus';
 import { useAppStore } from '../../store/app';
 import type { ProjectGroupView, SyncState, ViewItemView } from '../../types.ui';
 import { SettingsModal } from '../settings/SettingsModal';
@@ -42,6 +43,9 @@ export function Sidebar() {
   useEffect(() => {
     void reloadSidebar();
   }, []);
+
+  // ウィンドウにフォーカスが戻ったら案件・ビュー・同期状態を読み直す
+  useRefreshOnFocus(reloadSidebar);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

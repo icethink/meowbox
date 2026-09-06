@@ -10,3 +10,6 @@ apps/desktop/.vite
 
 # Tauri が生成する権限スキーマ
 apps/desktop/src-tauri/gen
+
+# MCP サイドカーのビルド生成物（tauri build 前にコピーされる）
+apps/desktop/src-tauri/binaries/

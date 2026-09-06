@@ -174,6 +174,20 @@ export interface LastSync {
   error: string | null;
 }
 
+// --- commands/mcp.rs ---------------------------------------------------------
+
+/** Claude に登録するための情報。パスとコピペ用の文字列だけを返す */
+export interface McpIntegration {
+  /** meowbox-mcp の絶対パス */
+  server_path: string;
+  /** そのパスに実行ファイルが実在するか。false ならまだビルドされていない（開発中など） */
+  server_exists: boolean;
+  /** claude_desktop_config.json に貼る JSON */
+  desktop_config_json: string;
+  /** Claude Code / Cowork 用のコマンド 1 行 */
+  claude_code_command: string;
+}
+
 // --- error.rs ----------------------------------------------------------------
 
 /** invoke が reject したときの中身 */

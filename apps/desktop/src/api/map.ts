@@ -21,7 +21,11 @@ import type {
 const WEEKDAY_KANJI = ['日', '月', '火', '水', '木', '金', '土'];
 
 /** スレッド一覧の 1 行に変換する。Claude の要約はまだ無いので `ai_snippet` は必ず null */
-export function threadSummaryToListItem(t: ThreadSummary, now?: Date): ThreadListItem {
+export function threadSummaryToListItem(
+  t: ThreadSummary,
+  now?: Date,
+  timeZone?: string,
+): ThreadListItem {
   return {
     thread_key: t.thread_key,
     account_id: t.account_id,
@@ -30,7 +34,7 @@ export function threadSummaryToListItem(t: ThreadSummary, now?: Date): ThreadLis
     subject: t.subject,
     ai_snippet: null,
     snippet: t.snippet,
-    time_label: formatRelativeDate(t.last_date, now),
+    time_label: formatRelativeDate(t.last_date, now, timeZone),
     date: t.last_date,
     is_unread: t.unread_count > 0,
     urgency: null,
@@ -58,12 +62,13 @@ function messageDtoToView(
   m: ThreadDetailDto['messages'][number],
   isLatest: boolean,
   now?: Date,
+  timeZone?: string,
 ): ThreadMessageView {
   return {
     id: m.id,
     from: m.from,
     initial: initialOf(m.from),
-    time_label: formatMessageTime(m.date, now),
+    time_label: formatMessageTime(m.date, now, timeZone),
     body: [{ text: m.body_text }],
     quoted_lines: m.quoted_text === '' ? 0 : m.quoted_text.split('\n').length,
     quoted_text: m.quoted_text,
@@ -78,7 +83,11 @@ function messageDtoToView(
 }
 
 /** スレッド詳細を UI 型に変換する。Claude の要約が無ければ `summary` は null のまま */
-export function threadDetailToView(d: ThreadDetailDto, now?: Date): ThreadDetail {
+export function threadDetailToView(
+  d: ThreadDetailDto,
+  now?: Date,
+  timeZone?: string,
+): ThreadDetail {
   // TODO(P3-b): 自アカウントのアドレスを除いて相手を選ぶ
   const counterpart: Address = d.messages[0]?.from ?? { name: null, email: '' };
   const counterpartName = counterpart.name ?? counterpart.email;
@@ -87,8 +96,9 @@ export function threadDetailToView(d: ThreadDetailDto, now?: Date): ThreadDetail
     ? {
         target: d.summary.target,
         body: [{ text: d.summary.summary }] as RichSpan[],
-        generated_label: formatMessageTime(d.summary.created_at, now),
+        generated_label: formatMessageTime(d.summary.created_at, now, timeZone),
         generated_at: d.summary.created_at,
+        model: d.summary.model,
       }
     : null;
 
@@ -102,7 +112,7 @@ export function threadDetailToView(d: ThreadDetailDto, now?: Date): ThreadDetail
     message_count: d.messages.length,
     summary,
     tasks: d.tasks,
-    messages: d.messages.map((m, i) => messageDtoToView(m, i === lastIndex, now)),
+    messages: d.messages.map((m, i) => messageDtoToView(m, i === lastIndex, now, timeZone)),
     reply_placeholder: `${counterpartName}さんへ返信…`,
   };
 }
@@ -124,11 +134,11 @@ function dueTone(due: string | null, now: Date): DigestItem['due_tone'] {
   return 'neutral';
 }
 
-function taskToDigestItem(t: Task, now: Date): DigestItem {
+function taskToDigestItem(t: Task, now: Date, timeZone?: string): DigestItem {
   return {
     id: t.id,
     title: t.title,
-    due_label: t.due ? formatDueDate(t.due, now) : null,
+    due_label: t.due ? formatDueDate(t.due, now, timeZone) : null,
     due_tone: dueTone(t.due, now),
     is_candidate: t.confidence < 0.7,
   };
@@ -140,13 +150,13 @@ function formatDateLabel(now: Date): string {
 }
 
 /** ダイジェスト DTO を UI 型に変換する。Claude の要約が無ければ `summary` は空配列 */
-export function digestToView(d: DigestDto, now: Date): Digest {
+export function digestToView(d: DigestDto, now: Date, timeZone?: string): Digest {
   return {
     date_label: formatDateLabel(now),
     summary: d.summary ? [{ text: d.summary.summary }] : [],
     groups: d.groups.map((g) => ({
       project_tag: g.project_tag ?? '未分類',
-      items: g.tasks.map((t) => taskToDigestItem(t, now)),
+      items: g.tasks.map((t) => taskToDigestItem(t, now, timeZone)),
     })),
   };
 }

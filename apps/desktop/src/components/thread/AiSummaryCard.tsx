@@ -41,6 +41,17 @@ export function AiSummaryCard({
       <header className="flex items-center gap-[8px]">
         <span className="size-[6px] shrink-0 rounded-full bg-ai" aria-hidden="true" />
         <h3 className="text-11 font-bold tracking-w4 text-ai">Claude による要約</h3>
+        {summary.model !== '' && (
+          <>
+            <span className="text-2xs text-ai-muted" aria-hidden="true">
+              ·
+            </span>
+            <span className="font-mono text-2xs text-ai-muted">{summary.model}</span>
+          </>
+        )}
+        <span className="text-2xs text-ai-muted" aria-hidden="true">
+          ·
+        </span>
         <span className="font-mono text-2xs text-faint">{summary.generated_label}</span>
         <button
           type="button"

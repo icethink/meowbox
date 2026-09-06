@@ -55,6 +55,49 @@ _An AI-friendly mail aggregator, written in Rust._
 - **要約・タスク抽出・ダイジェストはまだ実データが無い。** P1 で Claude が MCP 経由で
   書き込むようになるまでは、UI は空状態を出す
 
+## Claude と繋ぐ / Connect Claude
+
+Meowbox の MCP サーバは独立した stdio バイナリ `meowbox-mcp`。インストーラに同梱される
+（[ADR 0007](docs/adr/0007-mcp-server.md)）。
+
+- **Claude Desktop**: `claude_desktop_config.json` に次の形の JSON を貼る
+  （`command` は `meowbox-mcp.exe` の絶対パス）。
+
+  ```json
+  {
+    "mcpServers": {
+      "meowbox": {
+        "command": "C:\\Program Files\\Meowbox\\meowbox-mcp.exe",
+        "args": []
+      }
+    }
+  }
+  ```
+
+  Meowbox の設定（歯車）→「Claude 連携」を開くと、実際にインストールされたパス入りの
+  JSON がそのままコピーできる。
+
+- **Claude Code**:
+
+  ```sh
+  claude mcp add meowbox -- "C:\Program Files\Meowbox\meowbox-mcp.exe"
+  ```
+
+- **Cowork**: Claude Code と同じ形（`claude mcp add`）で登録する。
+
+登録できたら、まずは次の 3 つを試すとよい。
+
+1. 「Meowbox のアカウントを一覧して」
+2. 「今日届いた未読をスレッドごとにまとめて、要約を save_summary で保存して」
+3. 「案件A の未対応スレッドからタスクを抽出して upsert_tasks で登録して」
+
+### できないこと
+
+- **送信はできない。** `create_draft` で下書きを保存するところまで
+  （[ADR 0002](docs/adr/0002-no-send-over-mcp.md)）。
+- **既読・アーカイブなどの状態は変更されない。** `mark` は MCP に出していない。
+- **MCP サーバはネットワークに出ない。** ローカルの DB と `.eml` を読み書きするだけ。
+
 ## 特徴 / Features
 
 - **案件でメールを束ねる** — 1 案件に複数アドレスが配られても、`project_tag` で

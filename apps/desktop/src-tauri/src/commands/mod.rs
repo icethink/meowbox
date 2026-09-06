@@ -3,5 +3,6 @@
 
 pub mod accounts;
 pub mod drafts;
+pub mod mcp;
 pub mod sync;
 pub mod threads;

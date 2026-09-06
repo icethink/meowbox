@@ -46,7 +46,8 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },
   {
-    files: ['vite.config.ts', 'eslint.config.js'],
+    // ビルド用のスクリプトは Node で動く（ブラウザではない）
+    files: ['vite.config.ts', 'eslint.config.js', 'scripts/**/*.{js,mjs}'],
     languageOptions: { globals: globals.node },
   },
   prettier,
