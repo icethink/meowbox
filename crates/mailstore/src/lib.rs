@@ -13,7 +13,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use mailcore::{Account, AccountKind, Address, Message, MessageSummary, ThreadSummary};
+use mailcore::{Account, AccountKind, Address, Draft, Message, MessageSummary, ThreadSummary};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const SCHEMA_VERSION: i64 = 2;
@@ -730,6 +730,51 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    // ---- drafts --------------------------------------------------------
+
+    /// 下書きを 1 件保存する。status は常に 'draft'（送信は UI の承認操作だけ）。
+    pub fn insert_draft(&self, d: &NewDraft<'_>) -> Result<i64> {
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO drafts(account_id, in_reply_to, to_json, subject, body, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'draft', ?6)",
+            params![
+                d.account_id,
+                d.in_reply_to,
+                serde_json::to_string(d.to)?,
+                d.subject,
+                d.body,
+                now.to_rfc3339(),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 下書きを新しい順に返す。
+    pub fn list_drafts(&self, limit: usize) -> Result<Vec<Draft>> {
+        let limit = if limit == 0 { 200 } else { limit } as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, account_id, in_reply_to, to_json, subject, body, status, created_at
+             FROM drafts ORDER BY created_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], row_to_draft)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// 下書きを 1 件引く。無ければ None。
+    pub fn get_draft(&self, id: i64) -> Result<Option<Draft>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, account_id, in_reply_to, to_json, subject, body, status, created_at
+                 FROM drafts WHERE id = ?1",
+                params![id],
+                row_to_draft,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
     // ---- meta ----------------------------------------------------------
 
     /// `meta` テーブルの値を読む。無ければ None。
@@ -854,6 +899,23 @@ fn row_to_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<mailcore::Task> {
     })
 }
 
+/// `list_drafts` / `get_draft` で共有する行マッピング。
+/// 列の並びは両方の SELECT で揃えてあること。
+fn row_to_draft(r: &rusqlite::Row<'_>) -> rusqlite::Result<Draft> {
+    let to_json: String = r.get(3)?;
+    let created: String = r.get(7)?;
+    Ok(Draft {
+        id: r.get(0)?,
+        account_id: r.get(1)?,
+        in_reply_to: r.get(2)?,
+        to: serde_json::from_str(&to_json).unwrap_or_default(),
+        subject: r.get(4)?,
+        body: r.get(5)?,
+        status: r.get(6)?,
+        created_at: parse_ts(&created),
+    })
+}
+
 /// DB の文字列表現へ変換する。`AccountKind::as_str` と同じ形。
 fn task_status_str(s: mailcore::TaskStatus) -> &'static str {
     match s {
@@ -950,6 +1012,15 @@ pub struct NewTask<'a> {
     pub confidence: f32,
     /// "ai" | "user"
     pub created_by: &'a str,
+}
+
+/// 下書きの新規作成入力。
+pub struct NewDraft<'a> {
+    pub account_id: i64,
+    pub in_reply_to: Option<i64>,
+    pub to: &'a [mailcore::Address],
+    pub subject: &'a str,
+    pub body: &'a str,
 }
 
 /// `list_tasks` の絞り込み。
@@ -2269,5 +2340,70 @@ mod tests {
 
         // 無いキーを消してもエラーにならない。
         store.delete_meta("never_existed").unwrap();
+    }
+
+    #[test]
+    fn insert_draft_then_get_draft_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+        let to = vec![Address {
+            name: Some("山田".into()),
+            email: "yamada@client-a.example".into(),
+        }];
+
+        let id = store
+            .insert_draft(&NewDraft {
+                account_id,
+                in_reply_to: None,
+                to: &to,
+                subject: "Re: 見積の件",
+                body: "ご連絡ありがとうございます。",
+            })
+            .unwrap();
+
+        let draft = store.get_draft(id).unwrap().unwrap();
+        assert_eq!(draft.account_id, account_id);
+        assert_eq!(draft.subject, "Re: 見積の件");
+        assert_eq!(draft.body, "ご連絡ありがとうございます。");
+        assert_eq!(draft.status, "draft");
+        assert_eq!(draft.to.len(), 1);
+        assert_eq!(draft.to[0].name.as_deref(), Some("山田"));
+        assert_eq!(draft.to[0].email, "yamada@client-a.example");
+    }
+
+    #[test]
+    fn list_drafts_returns_the_newest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+
+        let first = store
+            .insert_draft(&NewDraft {
+                account_id,
+                in_reply_to: None,
+                to: &[],
+                subject: "件名1",
+                body: "本文1",
+            })
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = store
+            .insert_draft(&NewDraft {
+                account_id,
+                in_reply_to: None,
+                to: &[],
+                subject: "件名2",
+                body: "本文2",
+            })
+            .unwrap();
+
+        let drafts = store.list_drafts(0).unwrap();
+        let ids: Vec<i64> = drafts.iter().map(|d| d.id).collect();
+        assert_eq!(ids, vec![second, first]);
+    }
+
+    #[test]
+    fn get_draft_returns_none_for_a_missing_id() {
+        let store = Store::open_in_memory().unwrap();
+        assert!(store.get_draft(9999).unwrap().is_none());
     }
 }
