@@ -329,6 +329,8 @@ async fn main() -> Result<()> {
                     only_folder: folder.clone(),
                     since: Some(since),
                     data_dir: mailstore::paths::mail_dir(&data_dir),
+                    // CLI は完了時のサマリだけ出す。
+                    progress: None,
                 };
 
                 outcome.attempted += 1;

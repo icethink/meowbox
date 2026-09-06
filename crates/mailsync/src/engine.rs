@@ -24,9 +24,34 @@ use mailstore::{NewMessage, Store};
 
 use crate::parse;
 
+/// フォルダ内で処理した通数がこの数に達するごとに進捗を通知する。
+const PROGRESS_EVERY: usize = 10;
+
 pub struct SyncEngine {
     pub store: Arc<Store>,
 }
+
+/// 同期の途中経過。UI に逐次流すためのもの。
+/// メール本文・アドレス・パスワードなど秘密情報は絶対に入れない（件数とフォルダ名だけ）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncProgress {
+    /// いま処理しているフォルダ。`done = true` の最終通知では空文字列。
+    pub folder: String,
+    /// このフォルダで処理し終えた通数。
+    pub fetched: usize,
+    /// このフォルダでサーバから取得した総数。`fetched` の分母。
+    pub total: usize,
+    /// このフォルダで新規に DB へ入れた通数。
+    pub inserted: usize,
+    /// このフォルダで失敗した通数。
+    pub errors: usize,
+    /// アカウント 1 回分の同期が終わったときだけ true。
+    /// このときの各件数はフォルダ単位ではなく `SyncReport` と同じ全体の合計。
+    pub done: bool,
+}
+
+/// 進捗の通知先。`sync_once` の中から同期的に呼ばれるので、重い処理やブロックをしないこと。
+pub type ProgressSink = std::sync::Arc<dyn Fn(SyncProgress) + Send + Sync>;
 
 /// `sync_once` の挙動を調整するオプション。
 pub struct SyncOptions {
@@ -36,6 +61,15 @@ pub struct SyncOptions {
     pub since: Option<DateTime<Utc>>,
     /// raw .eml の保存先ルート。既定は "data/mail"。
     pub data_dir: PathBuf,
+    /// 進捗の通知先。`None` なら通知しない。
+    ///
+    /// フォルダ開始時、フォルダ内で `PROGRESS_EVERY` 通処理するごと、
+    /// フォルダの最後の 1 通のあと、そしてアカウント全体の同期が終わったとき
+    /// （`done: true`、1 回だけ）に呼ばれる。フォルダ単位の件数はそのフォルダの
+    /// 中だけのカウントで、`SyncReport`（全フォルダの累計）とは別物。
+    /// `sync_once` が `list_folders` の失敗などで `Err` を返す経路では
+    /// `done: true` の通知は来ない（呼び出し側は `Err` そのもので終了を判断する）。
+    pub progress: Option<ProgressSink>,
 }
 
 impl Default for SyncOptions {
@@ -44,7 +78,15 @@ impl Default for SyncOptions {
             only_folder: None,
             since: Some(Utc::now() - Duration::days(90)),
             data_dir: PathBuf::from("data/mail"),
+            progress: None,
         }
+    }
+}
+
+/// `opts.progress` が設定されていれば通知する。`None` なら何もしない。
+fn emit(opts: &SyncOptions, progress: SyncProgress) {
+    if let Some(sink) = &opts.progress {
+        sink(progress);
     }
 }
 
@@ -72,6 +114,11 @@ impl SyncEngine {
     }
 
     /// 1 アカウントを 1 回だけ同期する（デーモン化は呼び出し側）。
+    ///
+    /// `opts.progress` が設定されていれば、フォルダごとの途中経過に加えて、
+    /// すべてのフォルダを処理し終えたあと `done: true` の通知を 1 回だけ出す。
+    /// ただし `list_folders` の失敗などでこの関数が `Err` を返す場合、
+    /// `done: true` の通知は出さない（呼び出し側は戻り値の `Err` で判断する）。
     pub async fn sync_once(
         &self,
         account_id: i64,
@@ -94,6 +141,19 @@ impl SyncEngine {
                 report.errors += 1;
             }
         }
+
+        emit(
+            opts,
+            SyncProgress {
+                folder: String::new(),
+                fetched: report.fetched,
+                total: report.fetched,
+                inserted: report.inserted,
+                errors: report.errors,
+                done: true,
+            },
+        );
+
         Ok(report)
     }
 
@@ -123,8 +183,26 @@ impl SyncEngine {
         let raws = backend.fetch_new(path, last_uid, opts.since).await?;
         tracing::info!(folder = %path, count = raws.len(), "fetched messages");
 
+        let total = raws.len();
+        emit(
+            opts,
+            SyncProgress {
+                folder: path.to_string(),
+                fetched: 0,
+                total,
+                inserted: 0,
+                errors: 0,
+                done: false,
+            },
+        );
+
+        let mut folder_fetched = 0usize;
+        let mut folder_inserted = 0usize;
+        let mut folder_errors = 0usize;
+
         for raw in raws {
             report.fetched += 1;
+            folder_fetched += 1;
             let uid = raw.uid;
             // `store.set_folder_last_uid` は MAX(last_uid, uid) で進むので、この UID の
             // 保存に失敗しても後続の UID が成功すれば last_uid はそれを追い越す。つまり
@@ -134,7 +212,10 @@ impl SyncEngine {
             // 大きい）。raw .eml はパース前に保存済みなので本文自体は失われない。
             // TODO(P4): 失敗した UID を記録して再インデックスできるようにする
             match self.store_raw_message(account_id, folder_id, path, &raw, opts) {
-                Ok(InsertOutcome::Inserted) => report.inserted += 1,
+                Ok(InsertOutcome::Inserted) => {
+                    report.inserted += 1;
+                    folder_inserted += 1;
+                }
                 Ok(InsertOutcome::Skipped) => report.skipped += 1,
                 Err(_err) => {
                     let raw_path = opts
@@ -149,7 +230,22 @@ impl SyncEngine {
                         "failed to parse or store message"
                     );
                     report.errors += 1;
+                    folder_errors += 1;
                 }
+            }
+
+            if folder_fetched.is_multiple_of(PROGRESS_EVERY) || folder_fetched == total {
+                emit(
+                    opts,
+                    SyncProgress {
+                        folder: path.to_string(),
+                        fetched: folder_fetched,
+                        total,
+                        inserted: folder_inserted,
+                        errors: folder_errors,
+                        done: false,
+                    },
+                );
             }
         }
         Ok(())
@@ -358,6 +454,7 @@ mod tests {
             only_folder: None,
             since: None,
             data_dir: tmp.path().to_path_buf(),
+            progress: None,
         };
 
         let report = engine.sync_once(account_id, &backend, &opts).await.unwrap();
@@ -391,6 +488,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sync_reports_progress_and_finishes_with_done() {
+        let (store, account_id) = setup();
+        let engine = SyncEngine::new(store.clone());
+        let backend = FakeBackend::new(vec![
+            (1, UTF8_ALT.to_vec()),
+            (2, REPLY_MULTI.to_vec()),
+            (3, HTML_ONLY.to_vec()),
+        ]);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let events: Arc<Mutex<Vec<SyncProgress>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let opts = SyncOptions {
+            only_folder: None,
+            since: None,
+            data_dir: tmp.path().to_path_buf(),
+            progress: Some(Arc::new(move |p| sink_events.lock().unwrap().push(p))),
+        };
+
+        let report = engine.sync_once(account_id, &backend, &opts).await.unwrap();
+
+        let events = events.lock().unwrap();
+        let first = events.first().expect("expected at least one event");
+        assert_eq!(first.fetched, 0);
+        assert_eq!(first.total, 3);
+
+        let last = events.last().expect("expected at least one event");
+        assert!(last.done);
+        assert_eq!(last.inserted, report.inserted);
+
+        let done_count = events.iter().filter(|e| e.done).count();
+        assert_eq!(done_count, 1);
+
+        for e in events.iter().filter(|e| !e.done) {
+            assert_eq!(e.folder, "INBOX");
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_reports_progress_for_an_empty_folder() {
+        let (store, account_id) = setup();
+        let engine = SyncEngine::new(store.clone());
+        let backend = FakeBackend::new(Vec::new());
+        let tmp = tempfile::TempDir::new().unwrap();
+        let events: Arc<Mutex<Vec<SyncProgress>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let opts = SyncOptions {
+            only_folder: None,
+            since: None,
+            data_dir: tmp.path().to_path_buf(),
+            progress: Some(Arc::new(move |p| sink_events.lock().unwrap().push(p))),
+        };
+
+        engine.sync_once(account_id, &backend, &opts).await.unwrap();
+
+        let events = events.lock().unwrap();
+        let start = events
+            .iter()
+            .find(|e| !e.done)
+            .expect("expected a folder-start event");
+        assert_eq!(start.total, 0);
+        assert_eq!(start.fetched, 0);
+
+        // 途中通知が出ないこと: `done == false` のイベントは開始通知の 1 件だけ。
+        let non_done_count = events.iter().filter(|e| !e.done).count();
+        assert_eq!(non_done_count, 1);
+
+        let done_count = events.iter().filter(|e| e.done).count();
+        assert_eq!(done_count, 1);
+    }
+
+    #[tokio::test]
+    async fn progress_is_optional() {
+        let (store, account_id) = setup();
+        let engine = SyncEngine::new(store.clone());
+        let backend = FakeBackend::new(vec![
+            (1, UTF8_ALT.to_vec()),
+            (2, REPLY_MULTI.to_vec()),
+            (3, HTML_ONLY.to_vec()),
+        ]);
+        let tmp = tempfile::TempDir::new().unwrap();
+        let opts = SyncOptions {
+            data_dir: tmp.path().to_path_buf(),
+            ..SyncOptions::default()
+        };
+
+        let report = engine.sync_once(account_id, &backend, &opts).await.unwrap();
+        assert_eq!(report.inserted, 3);
+    }
+
+    #[tokio::test]
     async fn second_sync_resumes_from_last_uid() {
         let (store, account_id) = setup();
         let engine = SyncEngine::new(store.clone());
@@ -404,6 +591,7 @@ mod tests {
             only_folder: None,
             since: None,
             data_dir: tmp.path().to_path_buf(),
+            progress: None,
         };
 
         let first = engine.sync_once(account_id, &backend, &opts).await.unwrap();
@@ -431,6 +619,7 @@ mod tests {
             only_folder: None,
             since: None,
             data_dir: tmp.path().to_path_buf(),
+            progress: None,
         };
 
         engine.sync_once(account_id, &backend, &opts).await.unwrap();
@@ -456,6 +645,7 @@ mod tests {
             only_folder: None,
             since: None,
             data_dir: tmp.path().to_path_buf(),
+            progress: None,
         };
 
         let report = engine.sync_once(account_id, &backend, &opts).await.unwrap();
@@ -530,6 +720,7 @@ mod tests {
             only_folder: None,
             since: None,
             data_dir: tmp.path().to_path_buf(),
+            progress: None,
         };
 
         engine.sync_once(account_id, &backend, &opts).await.unwrap();
