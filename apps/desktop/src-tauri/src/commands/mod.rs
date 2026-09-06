@@ -2,5 +2,6 @@
 //! コマンド本体はそれを呼ぶだけの薄いラッパにする（テストしやすくするため）。
 
 pub mod accounts;
+pub mod drafts;
 pub mod sync;
 pub mod threads;
