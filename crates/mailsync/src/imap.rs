@@ -40,19 +40,87 @@ pub struct ImapConfig {
     pub starttls: bool,
 }
 
+/// アカウント設定から `ImapConfig` を組み立てられない理由。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConfigError {
+    #[error("kind '{kind}' not supported yet")]
+    NotImap { kind: &'static str },
+    #[error("has no host configured")]
+    NoHost,
+}
+
+impl ImapConfig {
+    /// アカウントの `settings` から組み立てる。
+    /// host は必須、port の既定は 993、username の既定は email、starttls の既定は false。
+    pub fn from_account(a: &mailcore::Account) -> Result<Self, ConfigError> {
+        if a.kind != mailcore::AccountKind::Imap {
+            return Err(ConfigError::NotImap {
+                kind: a.kind.as_str(),
+            });
+        }
+        let host = a
+            .settings
+            .get("host")
+            .and_then(|v| v.as_str())
+            .ok_or(ConfigError::NoHost)?;
+        let port = a
+            .settings
+            .get("port")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(993) as u16;
+        let username = a
+            .settings
+            .get("username")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&a.email);
+        let starttls = a
+            .settings
+            .get("starttls")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        Ok(ImapConfig {
+            account_id: a.id,
+            host: host.to_string(),
+            port,
+            username: username.to_string(),
+            starttls,
+        })
+    }
+}
+
 pub struct ImapBackend {
     pub config: ImapConfig,
+    /// `Some` のときは keyring を引かずにこのパスワードを使う（保存前の接続テスト用）。
+    /// パスワードを Debug / tracing に出す経路を作らないこと。
+    password: Option<String>,
 }
 
 impl ImapBackend {
+    /// keyring からパスワードを読む通常の使い方。
     pub fn new(config: ImapConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            password: None,
+        }
+    }
+
+    /// パスワードを直接渡す。アカウントをまだ保存していない接続テストで使う。
+    /// このとき `config.account_id` は keyring 参照に使われないので 0 でよい。
+    pub fn with_password(config: ImapConfig, password: String) -> Self {
+        Self {
+            config,
+            password: Some(password),
+        }
     }
 
     /// TCP + TLS（暗黙 TLS or STARTTLS）で繋ぎ、ログインまで済ませたセッションを返す。
     /// 呼び出すたびに新しく接続する。
     async fn connect(&self) -> Result<ImapSession<TlsStream<TcpStream>>, BackendError> {
-        let password = load_password(self.config.account_id)?;
+        let password = match &self.password {
+            Some(p) => p.clone(),
+            None => load_password(self.config.account_id)?,
+        };
 
         tracing::debug!(
             host = %self.config.host,
@@ -147,6 +215,24 @@ pub fn save_password(account_id: i64, password: &str) -> Result<(), BackendError
             "failed to save password for account {account_id} to keyring: {e}"
         ))
     })
+}
+
+/// keyring からパスワードを消す。エントリが無い場合は成功扱い。
+///
+/// keyring は OS の資格情報ストアを触るため、この関数のテストは無い（CI では走らせられない。
+/// `save_password` と同じ理由）。
+pub fn delete_password(account_id: i64) -> Result<(), BackendError> {
+    let entry = keyring::Entry::new("meowbox", &format!("account:{account_id}")).map_err(|e| {
+        BackendError::Auth(format!(
+            "keyring entry unavailable for account {account_id}: {e}"
+        ))
+    })?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(BackendError::Auth(format!(
+            "failed to delete password for account {account_id} from keyring: {e}"
+        ))),
+    }
 }
 
 /// `webpki-roots` のルート証明書を使う TLS コネクタ。
