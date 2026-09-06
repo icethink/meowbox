@@ -730,16 +730,14 @@ impl Store {
             .optional()?;
         match existing {
             Some(id) => {
-                // status は更新しない。人間が done / dismissed にしたタスクを
-                // Claude が呼び直したときに open へ引き戻してしまわないため。
+                // status と created_by は更新しない。
+                // status: 人間が done / dismissed にしたタスクを Claude が呼び直したときに
+                //         open へ引き戻してしまわないため。
+                // created_by: 人間が作った（created_by = 'user'）タスクを MCP 経由で
+                //             upsert したときに帰属が 'ai' に変わってしまわないため。
                 self.conn.execute(
-                    "UPDATE tasks SET due = ?2, confidence = ?3, created_by = ?4 WHERE id = ?1",
-                    params![
-                        id,
-                        t.due.map(|d| d.to_rfc3339()),
-                        t.confidence as f64,
-                        t.created_by,
-                    ],
+                    "UPDATE tasks SET due = ?2, confidence = ?3 WHERE id = ?1",
+                    params![id, t.due.map(|d| d.to_rfc3339()), t.confidence as f64],
                 )?;
                 Ok((id, false))
             }
@@ -2869,6 +2867,92 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].due.unwrap().to_rfc3339(), later.to_rfc3339());
         assert_eq!(tasks[0].confidence, 0.9);
+    }
+
+    #[test]
+    fn upsert_task_keeps_created_by_of_existing_task() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let (id_first, inserted_first) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        assert!(inserted_first);
+
+        let tasks = store.tasks_for_message(msg).unwrap();
+        assert_eq!(tasks[0].created_by, "user");
+
+        // 同じタスクを "ai" 由来として upsert しても、既存の created_by は上書きされない。
+        let (id_second, inserted_second) = store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: None,
+                confidence: 0.7,
+                created_by: "ai",
+            })
+            .unwrap();
+        assert!(!inserted_second);
+        assert_eq!(id_first, id_second);
+
+        let tasks = store.tasks_for_message(msg).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].created_by, "user");
+    }
+
+    #[test]
+    fn upsert_task_sets_created_by_on_new_task() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        store
+            .upsert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "見積を送る",
+                due: None,
+                confidence: 0.8,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        let tasks = store.tasks_for_message(msg).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].created_by, "ai");
     }
 
     #[test]
