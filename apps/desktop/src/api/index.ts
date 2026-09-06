@@ -25,6 +25,7 @@ export const listThreads = impl.listThreads;
 export const getThread = impl.getThread;
 export const getMessage = impl.getMessage;
 export const extractAttachment = impl.extractAttachment;
+export const openAttachment = impl.openAttachment;
 
 export const getDigest = impl.getDigest;
 export const mark = impl.mark;
@@ -35,6 +36,7 @@ export const onSyncProgress = impl.onSyncProgress;
 export const getSyncStatus = impl.getSyncStatus;
 
 export const createDraft = impl.createDraft;
+export const listDrafts = impl.listDrafts;
 export const generateAiDraft = impl.generateAiDraft;
 export const sendDraft = impl.sendDraft;
 

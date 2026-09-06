@@ -3,8 +3,15 @@
  * P2 まで `index.ts` に直接書かれていたものをそのままここへ移した。
  */
 
-import type { Account, Draft } from '../types';
-import type { LastSync, MessageDto, NewAccountInput, TestConnectionResult } from '../types.api';
+import type { Account } from '../types';
+import type {
+  DraftDto,
+  LastSync,
+  MessageDto,
+  NewAccountInput,
+  NewDraftInput,
+  TestConnectionResult,
+} from '../types.api';
 import type {
   Digest,
   ProjectGroupView,
@@ -114,6 +121,10 @@ export async function extractAttachment(_id: number): Promise<string> {
   return '/mock/attachment.txt';
 }
 
+export async function openAttachment(_id: number): Promise<void> {
+  // モックでは何もしない
+}
+
 export async function getDigest(_startOfDay?: Date): Promise<Digest> {
   return mockDigest;
 }
@@ -136,15 +147,29 @@ export async function onSyncProgress(): Promise<() => void> {
   return () => {};
 }
 
+/** 呼び出しごとに増える id。モックの下書きに一意な id を振るのに使う */
+let mockDraftSeq = 0;
+
 /**
  * 返信下書きを保存する。**送信はしない**（MVP の安全境界）。
  * MCP 側にも送信ツールは出さず、送信は UI の「確認して送信」だけが行う。
  */
-export async function createDraft(input: {
-  thread_key: string;
-  body: string;
-}): Promise<Pick<Draft, 'id' | 'body' | 'status'>> {
-  return { id: Date.now(), body: input.body, status: 'draft' };
+export async function createDraft(input: NewDraftInput): Promise<DraftDto> {
+  mockDraftSeq += 1;
+  return {
+    id: mockDraftSeq,
+    account_id: 0,
+    in_reply_to: input.in_reply_to,
+    to: [],
+    subject: '',
+    body: input.body,
+    status: 'draft',
+    created_at: new Date().toISOString(),
+  };
+}
+
+export async function listDrafts(): Promise<DraftDto[]> {
+  return [];
 }
 
 /** Claude に返信下書きを書かせる。P3 で MCP / Claude API に繋ぐ */
@@ -170,6 +195,7 @@ export const mockApi = {
   getThread,
   getMessage,
   extractAttachment,
+  openAttachment,
   getDigest,
   mark,
   syncAccount,
@@ -177,6 +203,7 @@ export const mockApi = {
   onSyncProgress,
   getSyncStatus,
   createDraft,
+  listDrafts,
   generateAiDraft,
   sendDraft,
 } satisfies MeowboxApi;

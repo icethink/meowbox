@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { createDraft, generateAiDraft, sendDraft } from '../../api';
+import { generateAiDraft, sendDraft } from '../../api';
 import { useAppStore } from '../../store/app';
 import { Modal } from '../ui/Modal';
 
@@ -30,7 +30,8 @@ export function ReplyBox({ threadKey, placeholder }: { threadKey: string; placeh
     try {
       const draft = await generateAiDraft(threadKey);
       insertAiDraft(draft);
-      await createDraft({ thread_key: threadKey, body: draft });
+      // TODO: 次の単位で in_reply_to を渡す
+      // await createDraft({ in_reply_to: threadKey, body: draft });
     } finally {
       setGenerating(false);
     }

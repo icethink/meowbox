@@ -20,12 +20,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-import type { Account, Draft } from '../types';
+import type { Account } from '../types';
 import type {
   DigestDto,
+  DraftDto,
   LastSync,
   MessageDto,
   NewAccountInput,
+  NewDraftInput,
   ProjectGroup,
   SyncProgressEvent,
   TestConnectionResult,
@@ -155,6 +157,11 @@ export async function extractAttachment(id: number): Promise<string> {
   return invoke<string>('extract_attachment', { id });
 }
 
+/** 添付を展開して OS の既定アプリで開く。パスの検証は Rust 側で行う */
+export async function openAttachment(id: number): Promise<void> {
+  await invoke('open_attachment', { id });
+}
+
 /** ローカルの「今日」の 0:00 を作る */
 function localStartOfDay(now: Date): Date {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -237,13 +244,13 @@ export async function getSyncStatus(): Promise<{ state: SyncState; label: string
 /**
  * 返信下書きを保存する。**送信はしない**（MVP の安全境界）。
  * MCP 側にも送信ツールは出さず、送信は UI の「確認して送信」だけが行う。
- * create_draft コマンドはまだ無いので、既存のまま（中身は据え置き）。
  */
-export async function createDraft(input: {
-  thread_key: string;
-  body: string;
-}): Promise<Pick<Draft, 'id' | 'body' | 'status'>> {
-  return { id: Date.now(), body: input.body, status: 'draft' };
+export async function createDraft(input: NewDraftInput): Promise<DraftDto> {
+  return invoke<DraftDto>('create_draft', { input });
+}
+
+export async function listDrafts(): Promise<DraftDto[]> {
+  return invoke<DraftDto[]>('list_drafts');
 }
 
 /**
@@ -272,6 +279,7 @@ export const tauriApi = {
   getThread,
   getMessage,
   extractAttachment,
+  openAttachment,
   getDigest,
   mark,
   syncAccount,
@@ -279,6 +287,7 @@ export const tauriApi = {
   onSyncProgress,
   getSyncStatus,
   createDraft,
+  listDrafts,
   generateAiDraft,
   sendDraft,
 } satisfies MeowboxApi;

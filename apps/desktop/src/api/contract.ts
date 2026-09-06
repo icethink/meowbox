@@ -4,11 +4,13 @@
  * TypeScript の型検査で防ぐ。
  */
 
-import type { Account, Draft } from '../types';
+import type { Account } from '../types';
 import type {
+  DraftDto,
   LastSync,
   MessageDto,
   NewAccountInput,
+  NewDraftInput,
   SyncProgressEvent,
   TestConnectionResult,
 } from '../types.api';
@@ -51,6 +53,8 @@ export interface MeowboxApi {
   getThread(threadKey: string): Promise<ThreadDetail | null>;
   getMessage(id: number): Promise<MessageDto | null>;
   extractAttachment(id: number): Promise<string>;
+  /** 添付を展開して OS の既定アプリで開く。パスの検証は Rust 側で行う */
+  openAttachment(id: number): Promise<void>;
 
   getDigest(startOfDay?: Date): Promise<Digest>;
   mark(ids: number[], action: MarkAction): Promise<number>;
@@ -64,10 +68,8 @@ export interface MeowboxApi {
    * 返信下書きを保存する。**送信はしない**（MVP の安全境界）。
    * MCP 側にも送信ツールは出さず、送信は UI の「確認して送信」だけが行う。
    */
-  createDraft(input: {
-    thread_key: string;
-    body: string;
-  }): Promise<Pick<Draft, 'id' | 'body' | 'status'>>;
+  createDraft(input: NewDraftInput): Promise<DraftDto>;
+  listDrafts(): Promise<DraftDto[]>;
   /** Claude に返信下書きを書かせる。P3 で MCP / Claude API に繋ぐ */
   generateAiDraft(threadKey: string): Promise<string>;
   /** 「確認して送信」。人間が承認したときだけ呼ばれる */

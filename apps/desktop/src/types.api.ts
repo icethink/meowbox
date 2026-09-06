@@ -125,6 +125,27 @@ export interface ViewCountsDto {
   drafts: number;
 }
 
+// --- commands/drafts.rs ------------------------------------------------------
+
+/** 返信下書きの作成入力。返信元のメッセージから宛先・件名を決める */
+export interface NewDraftInput {
+  /** 返信元のメッセージ id。これが下書きのアカウント・宛先・件名の元になる */
+  in_reply_to: number;
+  body: string;
+}
+
+export interface DraftDto {
+  id: number;
+  account_id: number;
+  in_reply_to: number | null;
+  to: Address[];
+  subject: string;
+  body: string;
+  /** 常に "draft"。送信は UI の承認操作だけ（MCP にも送信ツールを出さない） */
+  status: string;
+  created_at: Timestamp;
+}
+
 // --- commands/sync.rs --------------------------------------------------------
 
 /** `sync://progress` で流れる進捗。件数とフォルダ名だけで本文・パスワードは含まない */
