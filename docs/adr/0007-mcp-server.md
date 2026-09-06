@@ -102,3 +102,11 @@ P1 の目的は、Claude Desktop / Claude Code / Cowork から Meowbox のメー
   - MCP から GUI への push 通知は無い。UI はフォーカス再読込
     （`useRefreshOnFocus`）と、既定オフの 60 秒ポーリング（`useAutoRefresh`）で
     代用している
+
+## 追記 (2026-09-07)
+
+MCP の `structuredContent` はオブジェクトでなければならず、トップレベルで配列を
+直接返すとクライアントのスキーマ検証に落ちる。そのため `list_accounts` /
+`list_projects` / `list_tasks` / `search_messages` は、それぞれ
+`{ accounts: [...] }` / `{ projects: [...] }` / `{ tasks: [...] }` /
+`{ messages: [...], truncated }` という形でオブジェクトに包んで返す。

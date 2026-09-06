@@ -10,4 +10,5 @@ tools: Read, Grep, Glob, Bash
 3. 依存方向 core ← store ← sync ← (mcp, cli, desktop) の逆流
 4. 新機能にテストが無い
 5. コミットが 1 つの意味になっていない
+6. MCP ツールの返り値がオブジェクトでない（structuredContent はオブジェクト必須。トップレベルで配列を直接返している）
 問題なければ「LGTM」と 1 行。

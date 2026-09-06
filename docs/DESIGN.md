@@ -91,16 +91,16 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 
 | ツール | 役割 |
 |---|---|
-| `list_accounts` | アカウント一覧（id/name/email/project_tag/kind/last_synced_at/unread_count のみ） |
-| `list_projects` | 案件（project_tag）ごとにアカウントをまとめた一覧 |
-| `search_messages(query?, account_id?, project?, since?, unread_only?, limit)` | FTS + 条件検索。返り値は軽量（id/件名/差出人/日付/snippet） |
+| `list_accounts` | アカウント一覧。`{ accounts: [...] }`（各要素は id/name/email/project_tag/kind/last_synced_at/unread_count のみ） |
+| `list_projects` | 案件（project_tag）ごとにアカウントをまとめた一覧。`{ projects: [...] }` |
+| `search_messages(query?, account_id?, project?, since?, unread_only?, limit)` | FTS + 条件検索。`{ messages: [...], truncated }`（各要素は軽量な id/件名/差出人/日付/snippet） |
 | `get_thread(thread_key, include_quotes?)` | スレッドを時系列で1発取得（本文はテキスト整形済み。引用部は include_quotes=true のときだけ） |
 | `get_message(id, include_html?)` | 単体取得（include_html は現状無視される） |
 | `get_attachment(id)` | ファイルパスを返す（Claude 側で Read できる） |
 | `inbox_digest(project?, since?)` | 未読メールの要約用ビュー：スレッド単位でまとめ、既存要約があれば添付 |
 | `save_summary(target, model, summary)` | Claude が作った要約を DB に保存 |
 | `upsert_tasks(tasks[])` | タスク抽出結果を保存（`status` は上書きしない） |
-| `list_tasks(status?, project?)` | タスク一覧 |
+| `list_tasks(status?, project?)` | タスク一覧。`{ tasks: [...] }` |
 | `create_draft(account_id, body, in_reply_to?, to?, subject?)` | 返信下書きを保存（**送信はしない**） |
 
 **送信系と `mark`（既読・アーカイブ）は MCP に出さない**（[ADR 0002](adr/0002-no-send-over-mcp.md) /
