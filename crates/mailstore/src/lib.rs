@@ -29,15 +29,19 @@ impl Store {
         let conn = Connection::open(path).context("open sqlite")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // GUI・CLI・MCP サーバの 3 者が同じ SQLite ファイルを別プロセスから開くので、
+        // 書き込みが衝突しても即 SQLITE_BUSY にせず 5 秒までは待たせる。
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         let store = Store { conn };
         store.migrate()?;
         Ok(store)
     }
 
-    /// テスト用インメモリ DB。
+    /// テスト用インメモリ DB。本番と挙動を揃えるため busy_timeout も設定する。
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         let store = Store { conn };
         store.migrate()?;
         Ok(store)
@@ -730,6 +734,35 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// あるメッセージから抽出されたタスク。status は問わない（新しい順ではなく
+    /// 期限が近い順。`list_tasks` と同じ並び）。
+    pub fn tasks_for_message(&self, message_id: i64) -> Result<Vec<mailcore::Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, account_id, source_message_id, title, due, status,
+                    confidence, created_by, created_at
+             FROM tasks
+             WHERE source_message_id = ?1
+             ORDER BY (due IS NULL), due ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![message_id], row_to_task)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// あるスレッドに属するメッセージから抽出されたタスク。
+    /// `messages.thread_key` で join して引く。上限は無し。
+    pub fn tasks_for_thread(&self, thread_key: &str) -> Result<Vec<mailcore::Task>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.account_id, t.source_message_id, t.title, t.due, t.status,
+                    t.confidence, t.created_by, t.created_at
+             FROM tasks t
+             JOIN messages m ON m.id = t.source_message_id
+             WHERE m.thread_key = ?1
+             ORDER BY (t.due IS NULL), t.due ASC, t.id ASC",
+        )?;
+        let rows = stmt.query_map(params![thread_key], row_to_task)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     // ---- drafts --------------------------------------------------------
 
     /// 下書きを 1 件保存する。status は常に 'draft'（送信は UI の承認操作だけ）。
@@ -807,6 +840,27 @@ impl Store {
             .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
     }
+
+    /// 同期の最終成功時刻を記録する（RFC 3339）。`meta` の
+    /// `sync:<account_id>:finished_at` に入れる。
+    pub fn set_account_synced_at(&self, account_id: i64, at: DateTime<Utc>) -> Result<()> {
+        self.set_meta(&synced_at_key(account_id), &at.to_rfc3339())
+    }
+
+    /// 同期の最終成功時刻。まだ一度も同期していなければ None。
+    pub fn account_synced_at(&self, account_id: i64) -> Result<Option<DateTime<Utc>>> {
+        let Some(raw) = self.get_meta(&synced_at_key(account_id))? else {
+            return Ok(None);
+        };
+        Ok(DateTime::parse_from_rfc3339(&raw)
+            .ok()
+            .map(|d| d.with_timezone(&Utc)))
+    }
+}
+
+/// `set_account_synced_at` / `account_synced_at` で共有する meta キーの組み立て。
+fn synced_at_key(account_id: i64) -> String {
+    format!("sync:{account_id}:finished_at")
 }
 
 /// `list_accounts` / `get_account` で共有する行マッピング。
@@ -2405,5 +2459,228 @@ mod tests {
     fn get_draft_returns_none_for_a_missing_id() {
         let store = Store::open_in_memory().unwrap();
         assert!(store.get_draft(9999).unwrap().is_none());
+    }
+
+    #[test]
+    fn busy_timeout_is_set() {
+        let store = Store::open_in_memory().unwrap();
+        let ms: i64 = store
+            .conn()
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ms, 5000);
+    }
+
+    #[test]
+    fn tasks_for_message_returns_only_that_messages_tasks() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg_a = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名A",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        let msg_b = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            2,
+            "t1",
+            "件名B",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let task_a = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg_a),
+                title: "A のタスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg_b),
+                title: "B のタスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        let tasks = store.tasks_for_message(msg_a).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, task_a);
+    }
+
+    #[test]
+    fn tasks_for_thread_spans_the_whole_thread() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg_a = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名A",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        let msg_b = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            2,
+            "t1",
+            "Re: 件名A",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        let msg_other_thread = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            3,
+            "t2",
+            "別件",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+
+        let task_a = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg_a),
+                title: "A のタスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        let task_b = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg_b),
+                title: "B のタスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg_other_thread),
+                title: "別スレッドのタスク",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        let tasks = store.tasks_for_thread("t1").unwrap();
+        let ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&task_a));
+        assert!(ids.contains(&task_b));
+    }
+
+    #[test]
+    fn tasks_for_thread_orders_by_due_with_nulls_last() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let msg = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            false,
+        );
+        let soon = Utc::now();
+        let later = Utc::now() + chrono::Duration::days(1);
+
+        let id_no_due = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "期限なし",
+                due: None,
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        let id_later = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "後で",
+                due: Some(later),
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+        let id_soon = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: Some(msg),
+                title: "すぐ",
+                due: Some(soon),
+                confidence: 1.0,
+                created_by: "ai",
+            })
+            .unwrap();
+
+        let tasks = store.tasks_for_thread("t1").unwrap();
+        let ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![id_soon, id_later, id_no_due]);
+    }
+
+    #[test]
+    fn account_synced_at_round_trips() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+
+        assert_eq!(store.account_synced_at(account_id).unwrap(), None);
+
+        let now = Utc::now();
+        store.set_account_synced_at(account_id, now).unwrap();
+        let read_back = store.account_synced_at(account_id).unwrap().unwrap();
+        assert_eq!(read_back.to_rfc3339(), now.to_rfc3339());
+
+        store
+            .set_meta(&synced_at_key(account_id), "not a date")
+            .unwrap();
+        assert_eq!(store.account_synced_at(account_id).unwrap(), None);
     }
 }
