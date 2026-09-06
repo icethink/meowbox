@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SettingsModal } from './SettingsModal';
 import { deleteAccount, listAccounts, mcpIntegration, syncAccount } from '../../api';
+import { useAppStore } from '../../store/app';
 import type { Account } from '../../types';
 import type { McpIntegration } from '../../types.api';
 
@@ -55,6 +56,7 @@ describe('SettingsModal', () => {
     vi.mocked(deleteAccount).mockReset().mockResolvedValue(undefined);
     vi.mocked(syncAccount).mockReset().mockResolvedValue(undefined);
     vi.mocked(mcpIntegration).mockReset().mockResolvedValue(mcp);
+    useAppStore.setState({ autoRefresh: false });
   });
 
   it('アカウント一覧が表示される', async () => {
@@ -149,6 +151,21 @@ describe('SettingsModal', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(mcp.claude_code_command);
     });
+  });
+
+  it('60 秒ごとに自動更新のトグルは既定でオフで、押すと autoRefresh が true になる', async () => {
+    const user = userEvent.setup();
+    render(<SettingsModal open onClose={() => {}} onChanged={() => {}} />);
+    await screen.findByText('me@my-company.example');
+
+    const toggle = screen.getByRole('checkbox', { name: '60 秒ごとに自動更新' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(useAppStore.getState().autoRefresh).toBe(false);
+
+    await user.click(toggle);
+
+    expect(useAppStore.getState().autoRefresh).toBe(true);
+    expect(toggle).toHaveAttribute('aria-checked', 'true');
   });
 
   it('server_exists が false のとき警告文が出る', async () => {

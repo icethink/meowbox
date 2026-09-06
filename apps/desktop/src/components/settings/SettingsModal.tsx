@@ -4,9 +4,11 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { deleteAccount, listAccounts, mcpIntegration, syncAccount } from '../../api';
+import { useAppStore } from '../../store/app';
 import type { Account } from '../../types';
 import type { McpIntegration } from '../../types.api';
 import { Badge } from '../ui/Badge';
+import { Checkbox } from '../ui/Checkbox';
 import { Modal } from '../ui/Modal';
 
 function errorMessage(e: unknown): string {
@@ -128,6 +130,25 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? 'コピーしました' : 'コピー'}
     </button>
+  );
+}
+
+/** 一般設定の節。60 秒ポーリングの on/off は人間の操作なので accent 系の色を使う */
+function GeneralSection() {
+  const autoRefresh = useAppStore((s) => s.autoRefresh);
+  const setAutoRefresh = useAppStore((s) => s.setAutoRefresh);
+
+  return (
+    <div className="mt-[16px] border-t border-line pt-[16px]">
+      <h3 className="mb-[6px] text-base font-bold text-primary">全般</h3>
+      <div className="flex items-center gap-[10px]">
+        <Checkbox checked={autoRefresh} onChange={setAutoRefresh} label="60 秒ごとに自動更新" />
+        <span className="text-base text-secondary">60 秒ごとに自動更新</span>
+      </div>
+      <p className="mt-[4px] text-12 text-muted">
+        既定はオフ。オンにすると 60 秒ごとに一覧を読み直します。
+      </p>
+    </div>
   );
 }
 
@@ -267,6 +288,7 @@ export function SettingsModal({
         </div>
       )}
 
+      <GeneralSection />
       <ClaudeIntegrationSection mcp={mcp} />
     </Modal>
   );
