@@ -87,6 +87,7 @@ pub struct Message {
     pub date: DateTime<Utc>,
     pub snippet: String,
     pub body_text: String,
+    pub body_html: Option<String>,
     pub has_attachments: bool,
     pub is_read: bool,
     pub is_flagged: bool,

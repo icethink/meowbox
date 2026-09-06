@@ -430,7 +430,7 @@ impl Store {
             .query_row(
                 "SELECT m.id, m.account_id, f.path, m.uid, m.message_id, m.thread_key,
                         m.from_addr, m.from_name, m.to_json, m.cc_json, m.subject, m.date,
-                        m.snippet, m.body_text, m.has_attachments, m.is_read, m.is_flagged
+                        m.snippet, m.body_text, m.body_html, m.has_attachments, m.is_read, m.is_flagged
                  FROM messages m
                  JOIN folders f ON f.id = m.folder_id
                  WHERE m.id = ?1",
@@ -459,7 +459,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.account_id, f.path, m.uid, m.message_id, m.thread_key,
                     m.from_addr, m.from_name, m.to_json, m.cc_json, m.subject, m.date,
-                    m.snippet, m.body_text, m.has_attachments, m.is_read, m.is_flagged
+                    m.snippet, m.body_text, m.body_html, m.has_attachments, m.is_read, m.is_flagged
              FROM messages m
              JOIN folders f ON f.id = m.folder_id
              WHERE m.thread_key = ?1
@@ -941,9 +941,10 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         date: parse_ts(&date),
         snippet: r.get(12)?,
         body_text: r.get(13)?,
-        has_attachments: r.get::<_, i64>(14)? != 0,
-        is_read: r.get::<_, i64>(15)? != 0,
-        is_flagged: r.get::<_, i64>(16)? != 0,
+        body_html: r.get(14)?,
+        has_attachments: r.get::<_, i64>(15)? != 0,
+        is_read: r.get::<_, i64>(16)? != 0,
+        is_flagged: r.get::<_, i64>(17)? != 0,
     })
 }
 
@@ -1359,8 +1360,45 @@ mod tests {
         );
         assert_eq!(fetched.folder_path, "INBOX");
         assert_eq!(fetched.uid, 9);
+        assert_eq!(fetched.body_html, None);
 
         assert!(store.get_message(id + 1000).unwrap().is_none());
+    }
+
+    #[test]
+    fn get_message_returns_body_html_when_present() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: Some("山田".into()),
+            email: "yamada@client-a.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid: 10,
+            message_id: Some("<c@d>"),
+            thread_key: "見積の件",
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject: "Re: 見積の件",
+            date: Utc::now(),
+            snippet: "お世話になっております",
+            body_text: "お世話になっております。見積書を添付いたします。",
+            body_html: Some("<p>お世話になっております。</p>"),
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        let id = store.insert_message(&m).unwrap().unwrap();
+
+        let fetched = store.get_message(id).unwrap().unwrap();
+        assert_eq!(
+            fetched.body_html.as_deref(),
+            Some("<p>お世話になっております。</p>")
+        );
     }
 
     #[test]
