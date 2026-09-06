@@ -315,6 +315,51 @@ impl Store {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// あるメッセージの添付を id 昇順で返す。この並びは `insert_attachment_meta` を
+    /// 呼んだ順＝ raw .eml をパースしたときの並びと同じなので、
+    /// n 番目の要素が .eml の n 番目の添付に対応する。
+    pub fn list_attachments(&self, message_id: i64) -> Result<Vec<AttachmentRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, mime, size, path
+             FROM attachments WHERE message_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![message_id], row_to_attachment)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// 添付を 1 件 id で引く。見つからなければ `Ok(None)`。
+    pub fn get_attachment(&self, id: i64) -> Result<Option<AttachmentRow>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, message_id, filename, mime, size, path
+                 FROM attachments WHERE id = ?1",
+                params![id],
+                row_to_attachment,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// 展開した添付の保存先を記録する。
+    pub fn set_attachment_path(&self, id: i64, path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE attachments SET path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        Ok(())
+    }
+
+    /// 添付が同じメッセージの中で何番目か（0 始まり、id 昇順）。
+    /// raw .eml から中身を取り出すときの index に使う。見つからなければ None。
+    pub fn attachment_index(&self, id: i64) -> Result<Option<usize>> {
+        let Some(att) = self.get_attachment(id)? else {
+            return Ok(None);
+        };
+        let siblings = self.list_attachments(att.message_id)?;
+        Ok(siblings.iter().position(|a| a.id == id))
+    }
+
     /// FTS5 全文検索。`query` が空なら新着順。
     pub fn search(&self, q: &SearchQuery<'_>) -> Result<Vec<MessageSummary>> {
         let mut sql = String::from(
@@ -390,6 +435,19 @@ impl Store {
             )
             .optional()?;
         Ok(row)
+    }
+
+    /// raw .eml のパス。同期時に保存していなければ None。
+    pub fn message_raw_path(&self, id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT raw_path FROM messages WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
     }
 
     /// スレッド内の全メッセージを日時昇順で取得する（本文つき）。
@@ -584,6 +642,126 @@ impl Store {
             drafts,
         })
     }
+
+    // ---- ai summaries -----------------------------------------------------
+
+    /// Claude が作った要約を保存する。同じ target に複数入りうる（最新を使う）。
+    pub fn save_summary(&self, target: &str, model: &str, summary: &str) -> Result<i64> {
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO ai_summaries(target, model, summary, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![target, model, summary, now.to_rfc3339()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// target の最新の要約。無ければ None。
+    pub fn latest_summary(&self, target: &str) -> Result<Option<SummaryRow>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, target, model, summary, created_at
+                 FROM ai_summaries WHERE target = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![target],
+                row_to_summary,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    // ---- tasks -------------------------------------------------------------
+
+    pub fn insert_task(&self, t: &NewTask<'_>) -> Result<i64> {
+        let now = Utc::now();
+        self.conn.execute(
+            "INSERT INTO tasks(account_id, source_message_id, title, due, status,
+                                confidence, created_by, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7)",
+            params![
+                t.account_id,
+                t.source_message_id,
+                t.title,
+                t.due.map(|d| d.to_rfc3339()),
+                t.confidence as f64,
+                t.created_by,
+                now.to_rfc3339(),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// タスク一覧。期限が近い順（due が NULL のものは最後）、同じなら id 昇順。
+    pub fn list_tasks(&self, q: &TaskQuery<'_>) -> Result<Vec<mailcore::Task>> {
+        let mut where_clauses: Vec<String> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(status) = q.status {
+            where_clauses.push("status = ?".into());
+            args.push(Box::new(task_status_str(status)));
+        }
+        if let Some(tag) = q.project_tag {
+            where_clauses
+                .push("account_id IN (SELECT id FROM accounts WHERE project_tag = ?)".into());
+            args.push(Box::new(tag.to_string()));
+        }
+        if let Some(before) = q.due_before {
+            where_clauses.push("due IS NOT NULL AND due < ?".into());
+            args.push(Box::new(before.to_rfc3339()));
+        }
+
+        let mut sql = String::from(
+            "SELECT id, account_id, source_message_id, title, due, status,
+                    confidence, created_by, created_at
+             FROM tasks ",
+        );
+        if !where_clauses.is_empty() {
+            sql.push_str("WHERE ");
+            sql.push_str(&where_clauses.join(" AND "));
+            sql.push(' ');
+        }
+        sql.push_str("ORDER BY (due IS NULL), due ASC, id ASC LIMIT ?");
+        let limit = if q.limit == 0 { 200 } else { q.limit } as i64;
+        args.push(Box::new(limit));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), row_to_task)?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    // ---- meta ----------------------------------------------------------
+
+    /// `meta` テーブルの値を読む。無ければ None。
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        let row = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    /// `meta` テーブルに値を書く（上書き）。
+    /// スキーマバージョン以外の用途（同期の最終実行時刻など）にも使う。
+    /// **秘密情報を入れないこと**（keyring に入れる）。
+    /// `schema_version` は `migrate` が管理するので、このメソッドで触らないこと。
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// `meta` から key を消す。無くても成功。
+    pub fn delete_meta(&self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE key = ?1", params![key])?;
+        Ok(())
+    }
 }
 
 /// `list_accounts` / `get_account` で共有する行マッピング。
@@ -632,6 +810,69 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     })
 }
 
+/// `list_attachments` / `get_attachment` で共有する行マッピング。
+/// 列の並びは両方の SELECT で揃えてあること。
+fn row_to_attachment(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentRow> {
+    Ok(AttachmentRow {
+        id: r.get(0)?,
+        message_id: r.get(1)?,
+        filename: r.get(2)?,
+        mime: r.get(3)?,
+        size: r.get(4)?,
+        path: r.get(5)?,
+    })
+}
+
+/// `latest_summary` の行マッピング。
+fn row_to_summary(r: &rusqlite::Row<'_>) -> rusqlite::Result<SummaryRow> {
+    let created: String = r.get(4)?;
+    Ok(SummaryRow {
+        id: r.get(0)?,
+        target: r.get(1)?,
+        model: r.get(2)?,
+        summary: r.get(3)?,
+        created_at: parse_ts(&created),
+    })
+}
+
+/// `list_tasks` の行マッピング。
+fn row_to_task(r: &rusqlite::Row<'_>) -> rusqlite::Result<mailcore::Task> {
+    let due: Option<String> = r.get(4)?;
+    let status: String = r.get(5)?;
+    let confidence: f64 = r.get(6)?;
+    let created: String = r.get(8)?;
+    Ok(mailcore::Task {
+        id: r.get(0)?,
+        account_id: r.get(1)?,
+        source_message_id: r.get(2)?,
+        title: r.get(3)?,
+        due: due.as_deref().map(parse_ts),
+        status: parse_task_status(&status),
+        confidence: confidence as f32,
+        created_by: r.get(7)?,
+        created_at: parse_ts(&created),
+    })
+}
+
+/// DB の文字列表現へ変換する。`AccountKind::as_str` と同じ形。
+fn task_status_str(s: mailcore::TaskStatus) -> &'static str {
+    match s {
+        mailcore::TaskStatus::Open => "open",
+        mailcore::TaskStatus::Done => "done",
+        mailcore::TaskStatus::Dismissed => "dismissed",
+    }
+}
+
+/// DB の文字列から変換する。未知の値は `TaskStatus::Open` に倒す
+/// （`AccountKind::parse` の `unwrap_or` と同じ考え方）。
+fn parse_task_status(s: &str) -> mailcore::TaskStatus {
+    match s {
+        "done" => mailcore::TaskStatus::Done,
+        "dismissed" => mailcore::TaskStatus::Dismissed,
+        _ => mailcore::TaskStatus::Open,
+    }
+}
+
 /// `insert_message` の入力。所有権を取らないので同期ループで使いやすい。
 pub struct NewMessage<'a> {
     pub account_id: i64,
@@ -677,6 +918,49 @@ pub struct ThreadQuery<'a> {
     /// 0 のときは 200 とみなす
     pub limit: usize,
     pub offset: usize,
+}
+
+/// 添付 1 件。`path` は展開済みなら実ファイルのパス、未展開なら None。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentRow {
+    pub id: i64,
+    pub message_id: i64,
+    pub filename: String,
+    pub mime: String,
+    pub size: i64,
+    pub path: Option<String>,
+}
+
+/// `ai_summaries` の 1 行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SummaryRow {
+    pub id: i64,
+    pub target: String,
+    pub model: String,
+    pub summary: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// タスクの新規作成入力。
+pub struct NewTask<'a> {
+    pub account_id: i64,
+    pub source_message_id: Option<i64>,
+    pub title: &'a str,
+    pub due: Option<DateTime<Utc>>,
+    pub confidence: f32,
+    /// "ai" | "user"
+    pub created_by: &'a str,
+}
+
+/// `list_tasks` の絞り込み。
+#[derive(Debug, Clone, Default)]
+pub struct TaskQuery<'a> {
+    pub status: Option<mailcore::TaskStatus>,
+    pub project_tag: Option<&'a str>,
+    /// この日時より前が期限のものだけ。
+    pub due_before: Option<DateTime<Utc>>,
+    /// 0 のときは 200 とみなす。
+    pub limit: usize,
 }
 
 /// サイドバーの「ビュー」に出す件数。
@@ -1600,5 +1884,390 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[test]
+    fn list_attachments_returns_them_in_insert_order() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let message_id = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            true,
+        );
+
+        store
+            .insert_attachment_meta(message_id, "a.txt", "text/plain", 1)
+            .unwrap();
+        store
+            .insert_attachment_meta(message_id, "b.txt", "text/plain", 2)
+            .unwrap();
+        store
+            .insert_attachment_meta(message_id, "c.txt", "text/plain", 3)
+            .unwrap();
+
+        let atts = store.list_attachments(message_id).unwrap();
+        let names: Vec<&str> = atts.iter().map(|a| a.filename.as_str()).collect();
+        assert_eq!(names, vec!["a.txt", "b.txt", "c.txt"]);
+        assert!(atts.windows(2).all(|w| w[0].id < w[1].id));
+        assert_eq!(atts[0].message_id, message_id);
+        assert_eq!(atts[0].size, 1);
+        assert_eq!(atts[0].path, None);
+    }
+
+    #[test]
+    fn attachment_index_matches_the_insert_order() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let message_id = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            true,
+        );
+
+        store
+            .insert_attachment_meta(message_id, "a.txt", "text/plain", 1)
+            .unwrap();
+        let second = store
+            .insert_attachment_meta(message_id, "b.txt", "text/plain", 2)
+            .unwrap();
+
+        assert_eq!(store.attachment_index(second).unwrap(), Some(1));
+        assert_eq!(store.attachment_index(second + 1000).unwrap(), None);
+    }
+
+    #[test]
+    fn set_attachment_path_records_the_path() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let message_id = insert_msg(
+            &store,
+            account_id,
+            folder_id,
+            1,
+            "t1",
+            "件名",
+            None,
+            Utc::now(),
+            false,
+            false,
+            true,
+        );
+        let id = store
+            .insert_attachment_meta(message_id, "a.txt", "text/plain", 1)
+            .unwrap();
+
+        assert_eq!(store.get_attachment(id).unwrap().unwrap().path, None);
+
+        store
+            .set_attachment_path(id, "data/mail/1/INBOX/1-a.txt")
+            .unwrap();
+
+        assert_eq!(
+            store.get_attachment(id).unwrap().unwrap().path.as_deref(),
+            Some("data/mail/1/INBOX/1-a.txt")
+        );
+    }
+
+    #[test]
+    fn message_raw_path_is_none_when_not_stored() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, folder_id) = seed(&store);
+        let from = Address {
+            name: None,
+            email: "sato@client-a.example".into(),
+        };
+        let without_raw = store
+            .insert_message(&NewMessage {
+                account_id,
+                folder_id,
+                uid: 1,
+                message_id: None,
+                thread_key: "t1",
+                from: &from,
+                to: &[],
+                cc: &[],
+                subject: "x",
+                date: Utc::now(),
+                snippet: "x",
+                body_text: "x",
+                body_html: None,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                raw_path: None,
+            })
+            .unwrap()
+            .unwrap();
+        let with_raw = store
+            .insert_message(&NewMessage {
+                account_id,
+                folder_id,
+                uid: 2,
+                message_id: None,
+                thread_key: "t2",
+                from: &from,
+                to: &[],
+                cc: &[],
+                subject: "y",
+                date: Utc::now(),
+                snippet: "y",
+                body_text: "y",
+                body_html: None,
+                has_attachments: false,
+                is_read: false,
+                is_flagged: false,
+                raw_path: Some("data/mail/1/INBOX/2.eml"),
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(store.message_raw_path(without_raw).unwrap(), None);
+        assert_eq!(
+            store.message_raw_path(with_raw).unwrap().as_deref(),
+            Some("data/mail/1/INBOX/2.eml")
+        );
+        assert_eq!(store.message_raw_path(with_raw + 1000).unwrap(), None);
+    }
+
+    #[test]
+    fn latest_summary_returns_the_newest() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .save_summary("thread:t1", "claude", "最初の要約")
+            .unwrap();
+        store
+            .save_summary("thread:t1", "claude", "最新の要約")
+            .unwrap();
+        store
+            .save_summary("thread:t2", "claude", "別スレッド")
+            .unwrap();
+
+        let latest = store.latest_summary("thread:t1").unwrap().unwrap();
+        assert_eq!(latest.summary, "最新の要約");
+        assert_eq!(latest.target, "thread:t1");
+
+        let other = store.latest_summary("thread:t2").unwrap().unwrap();
+        assert_eq!(other.summary, "別スレッド");
+
+        assert!(store.latest_summary("thread:missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn list_tasks_orders_by_due_and_puts_null_last() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+        let soon = Utc::now();
+        let later = Utc::now() + chrono::Duration::days(1);
+
+        let id_no_due = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "期限なし",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        let id_later = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "後で",
+                due: Some(later),
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        let id_soon = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "すぐ",
+                due: Some(soon),
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+
+        let tasks = store.list_tasks(&TaskQuery::default()).unwrap();
+        let ids: Vec<i64> = tasks.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![id_soon, id_later, id_no_due]);
+    }
+
+    #[test]
+    fn list_tasks_filters_by_status_and_project_tag() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_a, _folder_a) = seed(&store);
+        let acc_b = store
+            .add_account(
+                "test-b",
+                AccountKind::Imap,
+                "b@example.com",
+                Some("案件B"),
+                &serde_json::json!({}),
+            )
+            .unwrap();
+
+        let open_a = store
+            .insert_task(&NewTask {
+                account_id: account_a,
+                source_message_id: None,
+                title: "A の未完了",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        let done_a = store
+            .insert_task(&NewTask {
+                account_id: account_a,
+                source_message_id: None,
+                title: "A の完了",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE tasks SET status = 'done' WHERE id = ?1",
+                params![done_a],
+            )
+            .unwrap();
+        store
+            .insert_task(&NewTask {
+                account_id: acc_b.id,
+                source_message_id: None,
+                title: "B の未完了",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+
+        let open_only = store
+            .list_tasks(&TaskQuery {
+                status: Some(mailcore::TaskStatus::Open),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(open_only.len(), 2);
+        assert!(open_only
+            .iter()
+            .all(|t| t.status == mailcore::TaskStatus::Open));
+
+        let done_only = store
+            .list_tasks(&TaskQuery {
+                status: Some(mailcore::TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(done_only.len(), 1);
+        assert_eq!(done_only[0].id, done_a);
+
+        let by_tag = store
+            .list_tasks(&TaskQuery {
+                project_tag: Some("案件A"),
+                ..Default::default()
+            })
+            .unwrap();
+        let by_tag_ids: Vec<i64> = by_tag.iter().map(|t| t.id).collect();
+        assert_eq!(by_tag_ids, vec![open_a, done_a]);
+    }
+
+    #[test]
+    fn list_tasks_filters_by_due_before() {
+        let store = Store::open_in_memory().unwrap();
+        let (account_id, _folder_id) = seed(&store);
+        let cutoff = Utc::now();
+        let before = cutoff - chrono::Duration::days(1);
+        let after = cutoff + chrono::Duration::days(1);
+
+        let id_before = store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "期限前",
+                due: Some(before),
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "期限後",
+                due: Some(after),
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+        store
+            .insert_task(&NewTask {
+                account_id,
+                source_message_id: None,
+                title: "期限なし",
+                due: None,
+                confidence: 1.0,
+                created_by: "user",
+            })
+            .unwrap();
+
+        let filtered = store
+            .list_tasks(&TaskQuery {
+                due_before: Some(cutoff),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, id_before);
+    }
+
+    #[test]
+    fn meta_round_trips_and_deletes() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.get_meta("last_sync_at").unwrap(), None);
+
+        store
+            .set_meta("last_sync_at", "2026-09-06T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            store.get_meta("last_sync_at").unwrap().as_deref(),
+            Some("2026-09-06T00:00:00Z")
+        );
+
+        store
+            .set_meta("last_sync_at", "2026-09-06T01:00:00Z")
+            .unwrap();
+        assert_eq!(
+            store.get_meta("last_sync_at").unwrap().as_deref(),
+            Some("2026-09-06T01:00:00Z")
+        );
+
+        store.delete_meta("last_sync_at").unwrap();
+        assert_eq!(store.get_meta("last_sync_at").unwrap(), None);
+
+        // 無いキーを消してもエラーにならない。
+        store.delete_meta("never_existed").unwrap();
     }
 }
