@@ -34,6 +34,9 @@ pub struct Parsed {
     pub body_html: Option<String>,
     pub attachments: Vec<AttachmentMeta>,
     pub has_attachments: bool,
+    /// 引用・署名として `body_text` から落とした部分。UI の「引用 N 行を表示」で使う。
+    /// 落とすものが無ければ空文字列。
+    pub quoted_text: String,
 }
 
 /// スレッドキーを決める。References → In-Reply-To → 正規化件名。
@@ -114,7 +117,10 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Parsed> {
     } else {
         String::new()
     };
-    let body_text = strip_quotes_and_signature(&body_text_raw);
+    let BodySplit {
+        body: body_text,
+        quoted: quoted_text,
+    } = split_quotes_and_signature(&body_text_raw);
 
     let attachments: Vec<AttachmentMeta> = attachment_parts(&msg)
         .into_iter()
@@ -150,6 +156,7 @@ pub fn parse(raw: &[u8]) -> anyhow::Result<Parsed> {
         body_html,
         attachments,
         has_attachments,
+        quoted_text,
     })
 }
 
@@ -436,5 +443,46 @@ mod tests {
         let split = split_quotes_and_signature(text);
         assert_eq!(split.body, text);
         assert_eq!(split.quoted, "");
+    }
+
+    #[test]
+    fn parse_keeps_the_quoted_text() {
+        let raw = b"From: tanaka@my-company.example\r\n\
+To: sato@client-a.example\r\n\
+Subject: Re: mitsumori\r\n\
+Date: Thu, 04 Sep 2025 09:00:00 +0900\r\n\
+Message-ID: <reply-001@my-company.example>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=UTF-8\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+\xE6\x89\xBF\xE7\x9F\xA5\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F\xE3\x80\x82\r\n\
+\r\n\
+On Mon, 01 Sep 2025 17:20:00 +0900, sato@client-a.example wrote:\r\n\
+> \xE3\x81\x8A\xE4\xB8\x96\xE8\xA9\xB1\xE3\x81\xAB\xE3\x81\xAA\xE3\x81\xA3\xE3\x81\xA6\xE3\x81\x8A\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\r\n\
+\r\n\
+-- \r\n\
+\xE7\x94\xB0\xE4\xB8\xAD \xE5\xA4\xAA\xE9\x83\x8E\r\n";
+        let p = parse(raw).expect("parse should succeed");
+        assert!(!p.body_text.contains("お世話になっております。"));
+        assert!(!p.body_text.contains("田中 太郎"));
+        assert!(p.quoted_text.contains("お世話になっております。"));
+        assert!(p.quoted_text.contains("田中 太郎"));
+    }
+
+    #[test]
+    fn parse_leaves_quoted_text_empty_without_quotes() {
+        let raw = b"From: sato@client-a.example\r\n\
+To: tanaka@my-company.example\r\n\
+Subject: mitsumori\r\n\
+Date: Mon, 01 Sep 2025 17:20:00 +0900\r\n\
+Message-ID: <plain-001@client-a.example>\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: text/plain; charset=UTF-8\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+\xE3\x81\x8A\xE4\xB8\x96\xE8\xA9\xB1\xE3\x81\xAB\xE3\x81\xAA\xE3\x81\xA3\xE3\x81\xA6\xE3\x81\x8A\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\r\n";
+        let p = parse(raw).expect("parse should succeed");
+        assert_eq!(p.quoted_text, "");
     }
 }
