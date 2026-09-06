@@ -2,6 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
+// テストの実行結果が実行マシンのタイムゾーンに左右されないよう UTC に固定する。
+// （手元 JST で緑・CI UTC で赤、を防ぐ。Node は TZ を読んで Date の壁時計を決める）
+process.env.TZ = 'UTC';
+
 // Tauri は固定ポートの dev server を前提にする（変わると WebView が繋がらない）。
 const host = process.env.TAURI_DEV_HOST;
 

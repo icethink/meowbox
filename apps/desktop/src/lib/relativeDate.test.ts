@@ -80,6 +80,11 @@ describe('formatRelativeDate', () => {
       typeof formatRelativeDate(new Date(2026, 8, 6, 9, 41).toISOString(), now, 'Not/AZone'),
     ).toBe('string');
   });
+
+  it('テストのタイムゾーンが UTC に固定されている', () => {
+    // JST（+09:00）のマシンなら 9 になるはずのものが 0 になれば、TZ=UTC 固定が効いている。
+    expect(new Date('2025-09-02T00:30:00Z').getHours()).toBe(0);
+  });
 });
 
 describe('formatMessageTime', () => {
