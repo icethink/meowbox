@@ -437,6 +437,25 @@ fn exercises_every_tool_over_stdio() {
         "search_messages が空でした: {search_results:?}"
     );
 
+    // --- search_messages: include_body の既定値（false）では本文が付かない。
+    let messages = search_results["messages"].as_array().unwrap();
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.get("body_text") == Some(&Value::Null)),
+        "include_body=false なのに本文が出ています: {messages:?}"
+    );
+
+    // --- search_messages: include_body=true で本文の先頭 2,000 文字が付く。
+    let search_with_body = server.call_ok("search_messages", json!({ "include_body": true }));
+    let messages = search_with_body["messages"].as_array().unwrap();
+    assert!(
+        messages.iter().any(|m| m
+            .get("body_text")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())),
+        "include_body=true なのに本文が見つかりません: {messages:?}"
+    );
     // --- get_thread: include_quotes による quoted_text の有無。
     let thread1_no_quotes = server.call_ok(
         "get_thread",
@@ -615,7 +634,7 @@ fn every_tool_returns_object_structured_content() {
         match name {
             "list_accounts" => json!({}),
             "list_projects" => json!({}),
-            "search_messages" => json!({}),
+            "search_messages" => json!({ "include_body": true }),
             "get_thread" => json!({ "thread_key": THREAD_KEY, "include_quotes": false }),
             "get_message" => json!({ "id": msg_id, "include_html": false }),
             "get_attachment" => json!({ "id": attachment_id }),

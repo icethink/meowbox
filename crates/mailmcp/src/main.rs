@@ -214,6 +214,8 @@ struct MessageSearchResult {
     is_read: bool,
     account_id: i64,
     project_tag: Option<String>,
+    /// `include_body=true` のときだけ本文の先頭 2,000 文字が入る。
+    body_text: Option<String>,
 }
 
 /// `get_thread` / `get_message` で共通のメッセージ表現。
@@ -401,10 +403,12 @@ impl MeowboxMcp {
         description = "全文検索。件名・本文・差出人・案件タグ・既読状態などで絞り込み、\
         軽量なメッセージ一覧（本文は含まない）を返す。limit は 1〜200 に丸められる。\
         上限で切れたときは truncated=true を返す。\
+        include_body=true のとき、本文の先頭 2,000 文字を各結果に付ける。\
         送信はできません。既読状態は変更されません。\n\
         Full-text search across subject/body/sender/project/read-state; returns a \
         lightweight message list without bodies. limit is clamped to 1..=200. \
         Returns truncated=true when the result was capped. \
+        When include_body is true, the first 2,000 characters of the body are included. \
         This server cannot send mail and never changes read state."
     )]
     async fn search_messages(
@@ -636,7 +640,7 @@ fn search_messages_impl(
         .map(|a| (a.id, a.project_tag))
         .collect();
 
-    let messages = results
+    let mut messages: Vec<MessageSearchResult> = results
         .into_iter()
         .map(|m| MessageSearchResult {
             id: m.id,
@@ -648,8 +652,18 @@ fn search_messages_impl(
             is_read: m.is_read,
             account_id: m.account_id,
             project_tag: project_by_account.get(&m.account_id).cloned().flatten(),
+            body_text: None,
         })
         .collect();
+
+    // include_body=false の既定では get_message を一切呼ばず、軽量さを保つ。
+    if args.include_body {
+        for m in &mut messages {
+            let full = store.get_message(m.id).map_err(|e| e.to_string())?;
+            // バイト数ではなく文字数で切る（日本語などマルチバイト文字が前提のため）。
+            m.body_text = full.map(|full| full.body_text.chars().take(2000).collect::<String>());
+        }
+    }
 
     Ok(SearchMessagesOut {
         messages,
@@ -1368,6 +1382,7 @@ mod tests {
             since: None,
             unread_only: false,
             limit: 10_000,
+            include_body: false,
         };
         // limit そのものが上限を超えて Store に渡らないことを、間接的に
         // 「エラーにならず結果が返る」ことで確認する（Store::search は limit をそのまま
@@ -1403,6 +1418,7 @@ mod tests {
             since: None,
             unread_only: false,
             limit: 2,
+            include_body: false,
         };
         let out = search_messages_impl(&store, &args).unwrap();
         assert_eq!(out.messages.len(), 2);
@@ -1434,6 +1450,7 @@ mod tests {
             since: None,
             unread_only: false,
             limit: 3,
+            include_body: false,
         };
         let out = search_messages_impl(&store, &args).unwrap();
         assert_eq!(out.messages.len(), 3);
@@ -1465,6 +1482,7 @@ mod tests {
             since: None,
             unread_only: false,
             limit: 0,
+            include_body: false,
         };
         let out = search_messages_impl(&store, &args).unwrap();
         assert_eq!(out.messages.len(), 1);
@@ -1494,10 +1512,111 @@ mod tests {
             since: None,
             unread_only: false,
             limit: 30,
+            include_body: false,
         };
         let out = search_messages_impl(&store, &args).unwrap();
         assert_eq!(out.messages.len(), 1);
         assert_eq!(out.messages[0].project_tag.as_deref(), Some("案件A"));
+    }
+
+    /// `insert_msg` に任意の `body_text` を指定できる版。`include_body` のテスト専用。
+    #[allow(clippy::too_many_arguments)]
+    fn insert_msg_with_body(
+        store: &Store,
+        account_id: i64,
+        folder_id: i64,
+        uid: u32,
+        thread_key: &str,
+        subject: &str,
+        body_text: &str,
+    ) -> i64 {
+        let from = Address {
+            name: Some("送信者".into()),
+            email: "sender@mail.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid,
+            message_id: None,
+            thread_key,
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject,
+            date: chrono::Utc::now(),
+            snippet: subject,
+            body_text,
+            body_html: None,
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        store.insert_message(&m).unwrap().unwrap()
+    }
+
+    #[test]
+    fn search_messages_impl_omits_body_text_by_default() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        insert_msg_with_body(&store, account, folder, 1, "t1", "件名", "本文です。");
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 30,
+            include_body: false,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages[0].body_text, None);
+    }
+
+    #[test]
+    fn search_messages_impl_includes_body_text_when_requested() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        insert_msg_with_body(&store, account, folder, 1, "t1", "件名", "本文です。");
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 30,
+            include_body: true,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        assert_eq!(out.messages[0].body_text.as_deref(), Some("本文です。"));
+    }
+
+    #[test]
+    fn search_messages_impl_truncates_body_text_at_a_character_boundary() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        // 日本語（マルチバイト）3,000 文字。バイト単位で切ると文字境界を壊す。
+        let long_body: String = "あ".repeat(3000);
+        insert_msg_with_body(&store, account, folder, 1, "t1", "件名", &long_body);
+
+        let args = SearchMessagesArgs {
+            query: None,
+            account_id: None,
+            project: None,
+            since: None,
+            unread_only: false,
+            limit: 30,
+            include_body: true,
+        };
+        let out = search_messages_impl(&store, &args).unwrap();
+        let body = out.messages[0].body_text.as_ref().unwrap();
+        assert_eq!(body.chars().count(), 2000);
     }
 
     #[test]

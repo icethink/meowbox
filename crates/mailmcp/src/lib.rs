@@ -26,6 +26,9 @@ pub struct SearchMessagesArgs {
     pub unread_only: bool,
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// true のとき body_text の先頭 2,000 文字を各結果に付ける。
+    #[serde(default)]
+    pub include_body: bool,
 }
 
 fn default_limit() -> usize {
