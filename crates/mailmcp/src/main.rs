@@ -1081,7 +1081,8 @@ fn is_inside(dir: &Path, path: &Path) -> std::io::Result<bool> {
     Ok(path.starts_with(&dir))
 }
 
-/// raw .eml から添付を取り出し、`<attachments_dir>/<message_id>/<安全なファイル名>` に書く。
+/// raw .eml から添付を取り出し、`<attachments_dir>/<message_id>/<attachment_id>-<安全なファイル名>`
+/// に書く。同じメール内に同名の添付が複数あっても `attachment_id` が別なので上書きしない。
 fn write_attachment(
     store: &Store,
     attachments_dir: &Path,
@@ -1103,17 +1104,18 @@ fn write_attachment(
         .map_err(|_| "添付の取り出しに失敗しました".to_string())?;
 
     let safe_name = mailsync::fsname::sanitize_path_segment(&attachment.filename);
-    let safe_name = if matches!(safe_name.as_str(), "" | "_" | "__") {
+    // フォールバック名は既に `id` を含んでいるので、二重に接頭辞を付けない。
+    let file_name = if matches!(safe_name.as_str(), "" | "_" | "__") {
         fallback_attachment_name(id)
     } else {
-        safe_name
+        format!("{id}-{safe_name}")
     };
 
     let dir = attachments_dir.join(attachment.message_id.to_string());
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("添付の保存先を作成できませんでした: {e}"))?;
 
-    let path = dir.join(safe_name);
+    let path = dir.join(file_name);
     std::fs::write(&path, &bytes).map_err(|e| format!("添付の保存に失敗しました: {e}"))?;
 
     let path_str = path.to_string_lossy().to_string();
@@ -2206,5 +2208,83 @@ mod tests {
             .canonicalize()
             .unwrap()
             .starts_with(attachments_dir.canonicalize().unwrap()));
+    }
+
+    fn sample_eml_with_two_same_named_attachments(filename: &str) -> Vec<u8> {
+        format!(
+            "From: sender <sender@mail.example>\r\n\
+             To: recipient <recipient@mail.example>\r\n\
+             Subject: attachment test\r\n\
+             Date: Wed, 06 Sep 2026 09:00:00 +0900\r\n\
+             Message-ID: <msg-att2@mail.example>\r\n\
+             MIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=\"BOUNDARY\"\r\n\
+             \r\n\
+             --BOUNDARY\r\n\
+             Content-Type: text/plain; charset=\"utf-8\"\r\n\
+             \r\n\
+             本文です。\r\n\
+             --BOUNDARY\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Disposition: attachment; filename=\"{filename}\"\r\n\
+             Content-Transfer-Encoding: 7bit\r\n\
+             \r\n\
+             first attachment\r\n\
+             --BOUNDARY\r\n\
+             Content-Type: text/plain\r\n\
+             Content-Disposition: attachment; filename=\"{filename}\"\r\n\
+             Content-Transfer-Encoding: 7bit\r\n\
+             \r\n\
+             second attachment\r\n\
+             --BOUNDARY--\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn extract_attachment_impl_keeps_same_named_attachments_in_one_message_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let eml_path = dir.path().join("1.eml");
+        std::fs::write(
+            &eml_path,
+            sample_eml_with_two_same_named_attachments("note.txt"),
+        )
+        .unwrap();
+        let attachments_dir = dir.path().join("attachments");
+
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let message_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "添付テスト",
+            chrono::Utc::now(),
+            Some(eml_path.to_str().unwrap()),
+        );
+        let first_id = store
+            .insert_attachment_meta(message_id, "note.txt", "text/plain", 16)
+            .unwrap();
+        let second_id = store
+            .insert_attachment_meta(message_id, "note.txt", "text/plain", 17)
+            .unwrap();
+
+        let first = extract_attachment_impl(&store, &attachments_dir, first_id).unwrap();
+        let second = extract_attachment_impl(&store, &attachments_dir, second_id).unwrap();
+
+        assert_ne!(first.path, second.path);
+        assert!(Path::new(&first.path).exists());
+        assert!(Path::new(&second.path).exists());
+        assert_eq!(
+            std::fs::read_to_string(&first.path).unwrap(),
+            "first attachment"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&second.path).unwrap(),
+            "second attachment"
+        );
     }
 }
