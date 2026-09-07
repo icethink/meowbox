@@ -71,7 +71,8 @@ pub struct UpsertTasksArgs {
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct TaskInput {
-    pub account_id: i64,
+    /// 省略時は `source_message_id` から推定する。
+    pub account_id: Option<i64>,
     pub source_message_id: Option<i64>,
     pub title: String,
     pub due: Option<String>,

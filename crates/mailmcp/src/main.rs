@@ -483,9 +483,11 @@ impl MeowboxMcp {
     #[tool(
         description = "タスク抽出結果をまとめて保存する（既存があれば更新、無ければ新規作成）。\
         created_by は常に \"ai\" になる。due を指定する場合は RFC3339 で、\
-        パースできなければそのタスクをエラーにする。送信はできません。既読状態は変更されません。\n\
+        パースできなければそのタスクをエラーにする。account_id は省略でき、その場合は\
+        source_message_id から推定する。送信はできません。既読状態は変更されません。\n\
         Saves extracted tasks in bulk (insert or update). created_by is always \"ai\". \
-        due must be RFC3339 if given; an unparsable value fails that task. \
+        due must be RFC3339 if given; an unparsable value fails that task. account_id \
+        may be omitted and is inferred from source_message_id. \
         This server cannot send mail and never changes read state."
     )]
     async fn upsert_tasks(
@@ -891,9 +893,33 @@ struct ValidatedTask<'a> {
     confidence: f32,
 }
 
-/// `upsert_tasks` の本体。`due` がパースできないタスクがあれば
-/// **1 件も書き込まずに**エラーを返す（途中まで書いてしまうと Claude も
-/// 人間も中途半端な状態に気づけないため）。
+/// `account_id` を解決する。`Some` ならそれを使い、`None` なら
+/// `source_message_id` から対応するメールのアカウントを引く。
+fn resolve_task_account_id(
+    store: &Store,
+    i: usize,
+    t: &mailmcp::TaskInput,
+) -> std::result::Result<i64, String> {
+    if let Some(account_id) = t.account_id {
+        return Ok(account_id);
+    }
+    let Some(source_message_id) = t.source_message_id else {
+        return Err(format!(
+            "tasks[{i}] は account_id か source_message_id のどちらかが必要です"
+        ));
+    };
+    let message = store
+        .get_message(source_message_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            format!("tasks[{i}] の source_message_id {source_message_id} に対応するメールが見つかりません")
+        })?;
+    Ok(message.account_id)
+}
+
+/// `upsert_tasks` の本体。`due` がパースできないタスクや `account_id` を
+/// 解決できないタスクがあれば、**1 件も書き込まずに**エラーを返す
+/// （途中まで書いてしまうと Claude も人間も中途半端な状態に気づけないため）。
 fn upsert_tasks_impl(
     store: &Store,
     args: &UpsertTasksArgs,
@@ -905,7 +931,7 @@ fn upsert_tasks_impl(
     // 1 段目: 全件を検証する。ここでエラーが出た時点ではまだ何も書いていない。
     let mut validated = Vec::with_capacity(args.tasks.len());
     for (i, t) in args.tasks.iter().enumerate() {
-        let account_id = t.account_id;
+        let account_id = resolve_task_account_id(store, i, t)?;
         let due = match &t.due {
             Some(s) => {
                 Some(parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?)
@@ -1838,7 +1864,7 @@ mod tests {
         let account = seed_account(&store, "a@mail.example", None);
         let args = UpsertTasksArgs {
             tasks: vec![mailmcp::TaskInput {
-                account_id: account,
+                account_id: Some(account),
                 source_message_id: None,
                 title: "見積の確認".to_string(),
                 due: Some("not-a-date".to_string()),
@@ -1865,7 +1891,7 @@ mod tests {
         );
 
         let task_input = || mailmcp::TaskInput {
-            account_id: account,
+            account_id: Some(account),
             source_message_id: Some(msg_id),
             title: "見積の確認".to_string(),
             due: None,
@@ -1893,14 +1919,14 @@ mod tests {
         let args = UpsertTasksArgs {
             tasks: vec![
                 mailmcp::TaskInput {
-                    account_id: account,
+                    account_id: Some(account),
                     source_message_id: None,
                     title: "1件目（正しい）".to_string(),
                     due: None,
                     confidence: 0.8,
                 },
                 mailmcp::TaskInput {
-                    account_id: account,
+                    account_id: Some(account),
                     source_message_id: None,
                     title: "2件目（due が不正）".to_string(),
                     due: Some("not-a-date".to_string()),
@@ -1923,14 +1949,14 @@ mod tests {
         let args = UpsertTasksArgs {
             tasks: vec![
                 mailmcp::TaskInput {
-                    account_id: account,
+                    account_id: Some(account),
                     source_message_id: None,
                     title: "1件目".to_string(),
                     due: None,
                     confidence: 0.8,
                 },
                 mailmcp::TaskInput {
-                    account_id: account,
+                    account_id: Some(account),
                     source_message_id: None,
                     title: "2件目".to_string(),
                     due: None,
@@ -1944,6 +1970,82 @@ mod tests {
 
         let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
         assert_eq!(saved.len(), 2);
+    }
+
+    #[test]
+    fn upsert_tasks_impl_infers_account_id_from_source_message_id() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            chrono::Utc::now(),
+            None,
+        );
+
+        let args = UpsertTasksArgs {
+            tasks: vec![mailmcp::TaskInput {
+                account_id: None,
+                source_message_id: Some(msg_id),
+                title: "見積の確認".to_string(),
+                due: None,
+                confidence: 0.8,
+            }],
+        };
+
+        let out = upsert_tasks_impl(&store, &args).unwrap();
+        assert_eq!((out.inserted, out.updated), (1, 0));
+
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].account_id, account);
+    }
+
+    #[test]
+    fn upsert_tasks_impl_rejects_task_without_account_id_or_source_message_id() {
+        let store = Store::open_in_memory().unwrap();
+        let args = UpsertTasksArgs {
+            tasks: vec![mailmcp::TaskInput {
+                account_id: None,
+                source_message_id: None,
+                title: "見積の確認".to_string(),
+                due: None,
+                confidence: 0.8,
+            }],
+        };
+
+        let err = upsert_tasks_impl(&store, &args).unwrap_err();
+        assert!(err.contains("account_id"));
+        assert!(err.contains("source_message_id"));
+
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
+        assert_eq!(saved.len(), 0);
+    }
+
+    #[test]
+    fn upsert_tasks_impl_rejects_unknown_source_message_id() {
+        let store = Store::open_in_memory().unwrap();
+        let args = UpsertTasksArgs {
+            tasks: vec![mailmcp::TaskInput {
+                account_id: None,
+                source_message_id: Some(999),
+                title: "見積の確認".to_string(),
+                due: None,
+                confidence: 0.8,
+            }],
+        };
+
+        let err = upsert_tasks_impl(&store, &args).unwrap_err();
+        assert!(err.contains("999"));
+        assert!(err.contains("見つかりません"));
+
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
+        assert_eq!(saved.len(), 0);
     }
 
     #[test]
