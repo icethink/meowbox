@@ -46,8 +46,8 @@ pub struct GetThreadArgs {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetMessageArgs {
     pub id: i64,
-    /// `body_html` を返すかどうか。
-    /// TODO: body_html を Store から取れるようにする（現状は無視される）。
+    /// true のとき `body_html` を返す（元のメールに HTML が無ければ null のまま）。
+    /// false のときは常に null。
     #[serde(default)]
     pub include_html: bool,
 }

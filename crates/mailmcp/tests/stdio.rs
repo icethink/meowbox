@@ -292,7 +292,7 @@ fn exercises_every_tool_over_stdio() {
     const THREAD_2: &str = "thread-2"; // 添付付き、未読
     const THREAD_3: &str = "thread-3"; // 案件タグ無しアカウント、未読
 
-    let (account_a, msg_c_id, attachment_id) = {
+    let (account_a, msg_a_id, msg_c_id, attachment_id) = {
         let store = Store::open(&db_path).unwrap();
 
         let account_a = store
@@ -319,8 +319,8 @@ fn exercises_every_tool_over_stdio() {
         let folder_a = store.ensure_folder(account_a, "INBOX", "inbox").unwrap();
         let folder_b = store.ensure_folder(account_b, "INBOX", "inbox").unwrap();
 
-        // thread-1: 既読の元メール（引用なし）+ 未読の返信（引用あり）。
-        insert_fixture_message(
+        // thread-1: 既読の元メール（引用なし、text/html 両方あり）+ 未読の返信（引用あり）。
+        let (msg_a_id, _) = insert_fixture_message(
             &store,
             &mail_root,
             account_a,
@@ -375,7 +375,7 @@ fn exercises_every_tool_over_stdio() {
             false,
         );
 
-        (account_a, msg_c_id, attachment_id)
+        (account_a, msg_a_id, msg_c_id, attachment_id)
     };
 
     let mut server = Server::start(data_dir.path());
@@ -456,6 +456,25 @@ fn exercises_every_tool_over_stdio() {
             .is_some_and(|s| !s.is_empty())),
         "include_body=true なのに本文が見つかりません: {messages:?}"
     );
+
+    // --- get_message: include_html による body_html の有無。
+    let msg_a_no_html = server.call_ok(
+        "get_message",
+        json!({ "id": msg_a_id, "include_html": false }),
+    );
+    assert_eq!(msg_a_no_html["body_html"], Value::Null);
+
+    let msg_a_with_html = server.call_ok(
+        "get_message",
+        json!({ "id": msg_a_id, "include_html": true }),
+    );
+    assert!(
+        msg_a_with_html["body_html"]
+            .as_str()
+            .is_some_and(|s| s.contains("<html>")),
+        "include_html=true なのに body_html が見つかりません: {msg_a_with_html:?}"
+    );
+
     // --- get_thread: include_quotes による quoted_text の有無。
     let thread1_no_quotes = server.call_ok(
         "get_thread",
@@ -684,7 +703,7 @@ fn every_tool_returns_object_structured_content() {
             "list_projects" => json!({}),
             "search_messages" => json!({ "include_body": true }),
             "get_thread" => json!({ "thread_key": THREAD_KEY, "include_quotes": false }),
-            "get_message" => json!({ "id": msg_id, "include_html": false }),
+            "get_message" => json!({ "id": msg_id, "include_html": true }),
             "get_attachment" => json!({ "id": attachment_id }),
             "inbox_digest" => json!({ "limit": 5 }),
             "save_summary" => json!({

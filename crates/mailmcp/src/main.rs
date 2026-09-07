@@ -227,6 +227,8 @@ struct MessageOut {
     /// RFC 3339
     date: String,
     body_text: String,
+    /// `include_html=true` のときだけ入る。元のメールに HTML が無ければ null のまま。
+    body_html: Option<String>,
     /// `get_thread` では `include_quotes=true` のときだけ入る（false なら省略）。
     /// `get_message` では常に入る。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -436,11 +438,12 @@ impl MeowboxMcp {
     }
 
     #[tool(
-        description = "1 通を本文・引用・添付一覧つきで取得する。include_html は現状無視される\
-        （Store がまだ body_html を返せないため）。送信はできません。既読状態は変更されません。\n\
+        description = "1 通を本文・引用・添付一覧つきで取得する。include_html=true のとき\
+        body_html を返す（元のメールに HTML が無ければ null）。\
+        送信はできません。既読状態は変更されません。\n\
         Fetches a single message with its body, quoted text and attachment list. \
-        include_html is currently ignored (Store does not expose body_html yet). \
-        This server cannot send mail and never changes read state."
+        When include_html is true, body_html is returned (null when the original message \
+        has no HTML part). This server cannot send mail and never changes read state."
     )]
     async fn get_message(
         &self,
@@ -688,12 +691,14 @@ fn quoted_text_for_message(store: &Store, message_id: i64) -> String {
         .unwrap_or_default()
 }
 
-/// `mailcore::Message` + 添付一覧（+ 必要なら引用）を `MessageOut` に詰め替える。
+/// `mailcore::Message` + 添付一覧（+ 必要なら引用・HTML 本文）を `MessageOut` に詰め替える。
 /// `get_thread` / `get_message` の両方から呼ぶ共通処理。
+/// `get_thread` は `include_html` を持たないので常に `false` を渡す。
 fn message_to_out(
     store: &Store,
     msg: mailcore::Message,
     include_quotes: bool,
+    include_html: bool,
 ) -> std::result::Result<MessageOut, String> {
     let quoted_text = if include_quotes {
         Some(quoted_text_for_message(store, msg.id))
@@ -706,6 +711,7 @@ fn message_to_out(
         .into_iter()
         .map(AttachmentOut::from)
         .collect();
+    let body_html = if include_html { msg.body_html } else { None };
 
     Ok(MessageOut {
         id: msg.id,
@@ -713,6 +719,7 @@ fn message_to_out(
         to: msg.to.into_iter().map(AddressOut::from).collect(),
         date: msg.date.to_rfc3339(),
         body_text: msg.body_text,
+        body_html,
         quoted_text,
         attachments,
     })
@@ -754,7 +761,7 @@ fn get_thread_impl(store: &Store, args: &GetThreadArgs) -> std::result::Result<T
 
     let mut out_messages = Vec::with_capacity(messages.len());
     for m in messages {
-        out_messages.push(message_to_out(store, m, args.include_quotes)?);
+        out_messages.push(message_to_out(store, m, args.include_quotes, false)?);
     }
 
     Ok(ThreadOut {
@@ -772,16 +779,11 @@ fn get_message_impl(
     store: &Store,
     args: &GetMessageArgs,
 ) -> std::result::Result<MessageOut, String> {
-    // include_html は body_html を返すかどうかのフラグだが、`Store::get_message` が
-    // まだ body_html を返さないため、現状は無視する。
-    // TODO: body_html を Store から取れるようにする。
-    let _ = args.include_html;
-
     let msg = store
         .get_message(args.id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "メッセージが見つかりません".to_string())?;
-    message_to_out(store, msg, true)
+    message_to_out(store, msg, true, args.include_html)
 }
 
 /// `inbox_digest` の `limit` が取りうる最大値。
@@ -1393,6 +1395,44 @@ mod tests {
         store.insert_message(&m).unwrap().unwrap()
     }
 
+    /// `insert_msg` に `body_html` を指定できる版。HTML の有無を確かめるテスト専用。
+    #[allow(clippy::too_many_arguments)]
+    fn insert_msg_with_html(
+        store: &Store,
+        account_id: i64,
+        folder_id: i64,
+        uid: u32,
+        thread_key: &str,
+        subject: &str,
+        date: chrono::DateTime<chrono::Utc>,
+        body_html: Option<&str>,
+    ) -> i64 {
+        let from = Address {
+            name: Some("送信者".into()),
+            email: "sender@mail.example".into(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid,
+            message_id: None,
+            thread_key,
+            from: &from,
+            to: &[],
+            cc: &[],
+            subject,
+            date,
+            snippet: subject,
+            body_text: "本文です。",
+            body_html,
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        store.insert_message(&m).unwrap().unwrap()
+    }
+
     fn sample_eml_with_quote() -> Vec<u8> {
         let text = "From: sender <sender@mail.example>\r\n\
              To: recipient <recipient@mail.example>\r\n\
@@ -1864,6 +1904,78 @@ mod tests {
         );
         assert_eq!(out.attachments.len(), 1);
         assert_eq!(out.attachments[0].filename, "note.txt");
+    }
+
+    #[test]
+    fn get_message_impl_omits_body_html_by_default() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_html(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            chrono::Utc::now(),
+            Some("<p>html本文</p>"),
+        );
+
+        let args = GetMessageArgs {
+            id: msg_id,
+            include_html: false,
+        };
+        let out = get_message_impl(&store, &args).unwrap();
+        assert_eq!(out.body_html, None);
+    }
+
+    #[test]
+    fn get_message_impl_returns_body_html_when_present_and_requested() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_html(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            chrono::Utc::now(),
+            Some("<p>html本文</p>"),
+        );
+
+        let args = GetMessageArgs {
+            id: msg_id,
+            include_html: true,
+        };
+        let out = get_message_impl(&store, &args).unwrap();
+        assert_eq!(out.body_html.as_deref(), Some("<p>html本文</p>"));
+    }
+
+    #[test]
+    fn get_message_impl_returns_none_body_html_when_absent_even_if_requested() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_html(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            chrono::Utc::now(),
+            None,
+        );
+
+        let args = GetMessageArgs {
+            id: msg_id,
+            include_html: true,
+        };
+        let out = get_message_impl(&store, &args).unwrap();
+        assert_eq!(out.body_html, None);
     }
 
     #[test]
