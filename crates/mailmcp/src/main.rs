@@ -520,11 +520,13 @@ impl MeowboxMcp {
     #[tool(
         description = "下書きを保存するだけで、送信はしません。送信は Meowbox の画面から人間が行います。\
         in_reply_to があれば宛先・件名（Re: を二重に付けない）を補う。to / subject を指定すれば\
-        そちらを優先する。既読状態は変更されません。\n\
+        そちらを優先する。reply_all=true のときは、元メールの to / cc も宛先に含める\
+        （自分のアドレスは除く）。既読状態は変更されません。\n\
         Saves a reply draft only; it never sends anything. Sending is done by a human from \
         the Meowbox UI. If in_reply_to is given, the recipient and subject (without doubling \
-        \"Re:\") are inferred, unless to / subject are given explicitly. \
-        This server never changes read state."
+        \"Re:\") are inferred, unless to / subject are given explicitly. When reply_all is \
+        true, the original message's To and Cc are also included as recipients, excluding \
+        your own address. This server never changes read state."
     )]
     async fn create_draft(
         &self,
@@ -1011,6 +1013,42 @@ fn list_tasks_impl(
     })
 }
 
+/// `reply_all=true` のときの宛先を組み立てる。
+/// 「元メールの差出人 → to → cc」の順で集め、そのアカウント自身のアドレスを除き、
+/// 大文字小文字を無視して重複を除く（最初に出てきた表記を残す）。
+fn reply_all_recipients(
+    store: &Store,
+    account_id: i64,
+    original: &mailcore::Message,
+) -> std::result::Result<Vec<Address>, String> {
+    let account = store
+        .get_account(account_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "account_id に対応するアカウントが見つかりません".to_string())?;
+    let own_email = account.email.to_lowercase();
+
+    let candidates = std::iter::once(original.from.clone())
+        .chain(original.to.iter().cloned())
+        .chain(original.cc.iter().cloned());
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut recipients: Vec<Address> = Vec::new();
+    for addr in candidates {
+        let lower = addr.email.to_lowercase();
+        if lower == own_email {
+            continue;
+        }
+        if seen.insert(lower) {
+            recipients.push(addr);
+        }
+    }
+
+    if recipients.is_empty() {
+        return Err("宛先が空になりました".to_string());
+    }
+    Ok(recipients)
+}
+
 /// `create_draft` の宛先・件名を決める。`to` / `subject` が明示されていればそちらを
 /// 優先し、無ければ `in_reply_to` のメッセージから補う。
 fn resolve_draft_to_and_subject(
@@ -1033,6 +1071,7 @@ fn resolve_draft_to_and_subject(
     };
 
     let to = match &args.to {
+        // to が明示されていれば、reply_all の指定に関わらずそちらを優先する。
         Some(addrs) => addrs
             .iter()
             .map(|email| Address {
@@ -1040,6 +1079,12 @@ fn resolve_draft_to_and_subject(
                 email: email.clone(),
             })
             .collect(),
+        None if args.reply_all => {
+            let original = original
+                .as_ref()
+                .ok_or_else(|| "reply_all には in_reply_to が必要です".to_string())?;
+            reply_all_recipients(store, args.account_id, original)?
+        }
         None => match &original {
             Some(msg) => vec![msg.from.clone()],
             None => {
@@ -2266,6 +2311,7 @@ mod tests {
             to: Some(vec!["client@client.example".to_string()]),
             subject: Some("件名".to_string()),
             body: "   ".to_string(),
+            reply_all: false,
         };
         assert!(create_draft_impl(&store, &args).is_err());
     }
@@ -2280,6 +2326,7 @@ mod tests {
             to: None,
             subject: None,
             body: "本文です。".to_string(),
+            reply_all: false,
         };
         assert!(create_draft_impl(&store, &args).is_err());
     }
@@ -2306,6 +2353,7 @@ mod tests {
             to: None,
             subject: None,
             body: "承知しました。".to_string(),
+            reply_all: false,
         };
         let out = create_draft_impl(&store, &args).unwrap();
 
@@ -2313,6 +2361,190 @@ mod tests {
         assert_eq!(draft.subject, "Re: 見積の件");
         assert_eq!(draft.status, "draft");
         assert_eq!(draft.to[0].email, "sender@mail.example");
+    }
+
+    /// `reply_all` テスト用に、from / to / cc を指定したメッセージを直接 DB に入れる。
+    #[allow(clippy::too_many_arguments)]
+    fn insert_msg_with_recipients(
+        store: &Store,
+        account_id: i64,
+        folder_id: i64,
+        uid: u32,
+        thread_key: &str,
+        subject: &str,
+        from_email: &str,
+        to: &[Address],
+        cc: &[Address],
+    ) -> i64 {
+        let from = Address {
+            name: None,
+            email: from_email.to_string(),
+        };
+        let m = NewMessage {
+            account_id,
+            folder_id,
+            uid,
+            message_id: None,
+            thread_key,
+            from: &from,
+            to,
+            cc,
+            subject,
+            date: chrono::Utc::now(),
+            snippet: subject,
+            body_text: "本文です。",
+            body_html: None,
+            has_attachments: false,
+            is_read: false,
+            is_flagged: false,
+            raw_path: None,
+        };
+        store.insert_message(&m).unwrap().unwrap()
+    }
+
+    #[test]
+    fn create_draft_impl_reply_all_false_only_uses_the_sender() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "account-a@mail-a.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_recipients(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            "sender@client.example",
+            &[Address {
+                name: None,
+                email: "account-a@mail-a.example".to_string(),
+            }],
+            &[Address {
+                name: None,
+                email: "watcher@client.example".to_string(),
+            }],
+        );
+
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: Some(msg_id),
+            to: None,
+            subject: None,
+            body: "承知しました。".to_string(),
+            reply_all: false,
+        };
+        let out = create_draft_impl(&store, &args).unwrap();
+        let draft = store.get_draft(out.id).unwrap().unwrap();
+        assert_eq!(draft.to.len(), 1);
+        assert_eq!(draft.to[0].email, "sender@client.example");
+    }
+
+    #[test]
+    fn create_draft_impl_reply_all_includes_to_and_cc_but_excludes_own_address() {
+        let store = Store::open_in_memory().unwrap();
+        // アカウント自身のアドレスは大文字小文字が違う表記で to に含める。
+        let account = seed_account(&store, "account-a@mail-a.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_recipients(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            "sender@client.example",
+            &[
+                Address {
+                    name: None,
+                    email: "Account-A@Mail-A.example".to_string(),
+                },
+                Address {
+                    name: None,
+                    email: "colleague@client.example".to_string(),
+                },
+            ],
+            &[Address {
+                name: None,
+                email: "watcher@client.example".to_string(),
+            }],
+        );
+
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: Some(msg_id),
+            to: None,
+            subject: None,
+            body: "承知しました。".to_string(),
+            reply_all: true,
+        };
+        let out = create_draft_impl(&store, &args).unwrap();
+        let draft = store.get_draft(out.id).unwrap().unwrap();
+        let emails: Vec<&str> = draft.to.iter().map(|a| a.email.as_str()).collect();
+        assert_eq!(
+            emails,
+            vec![
+                "sender@client.example",
+                "colleague@client.example",
+                "watcher@client.example",
+            ]
+        );
+        assert!(
+            !emails
+                .iter()
+                .any(|e| e.eq_ignore_ascii_case("account-a@mail-a.example")),
+            "自分のアドレスが除かれていません: {emails:?}"
+        );
+    }
+
+    #[test]
+    fn create_draft_impl_explicit_to_wins_over_reply_all() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "account-a@mail-a.example", None);
+        let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
+        let msg_id = insert_msg_with_recipients(
+            &store,
+            account,
+            folder,
+            1,
+            "thread-1",
+            "件名",
+            "sender@client.example",
+            &[],
+            &[Address {
+                name: None,
+                email: "watcher@client.example".to_string(),
+            }],
+        );
+
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: Some(msg_id),
+            to: Some(vec!["explicit@client.example".to_string()]),
+            subject: None,
+            body: "承知しました。".to_string(),
+            reply_all: true,
+        };
+        let out = create_draft_impl(&store, &args).unwrap();
+        let draft = store.get_draft(out.id).unwrap().unwrap();
+        assert_eq!(draft.to.len(), 1);
+        assert_eq!(draft.to[0].email, "explicit@client.example");
+    }
+
+    #[test]
+    fn create_draft_impl_reply_all_requires_in_reply_to() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "account-a@mail-a.example", None);
+        let args = CreateDraftArgs {
+            account_id: account,
+            in_reply_to: None,
+            to: None,
+            subject: Some("件名".to_string()),
+            body: "承知しました。".to_string(),
+            reply_all: true,
+        };
+        let err = create_draft_impl(&store, &args).unwrap_err();
+        assert!(err.contains("reply_all"));
+        assert!(err.contains("in_reply_to"));
     }
 
     fn sample_eml_with_attachment(filename: &str) -> Vec<u8> {

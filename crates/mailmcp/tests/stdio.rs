@@ -537,6 +537,39 @@ fn exercises_every_tool_over_stdio() {
         assert_eq!(draft.status, "draft");
     }
 
+    // --- create_draft: reply_all=true で to / cc も宛先に含まれ、自分は除かれる
+    //     （attachment-mixed.eml の宛先は account_a 自身なので除外されるはず）。
+    let draft_reply_all = server.call_ok(
+        "create_draft",
+        json!({
+            "account_id": account_a,
+            "in_reply_to": msg_c_id,
+            "body": "承知しました。",
+            "reply_all": true,
+        }),
+    );
+    let draft_reply_all_id = draft_reply_all["id"].as_i64().expect("draft id");
+    {
+        let store = Store::open(&db_path).unwrap();
+        let draft = store
+            .get_draft(draft_reply_all_id)
+            .unwrap()
+            .expect("draft exists");
+        assert!(
+            !draft
+                .to
+                .iter()
+                .any(|a| a.email.eq_ignore_ascii_case("account-a@mail-a.example")),
+            "reply_all の宛先に自分のアドレスが残っています: {:?}",
+            draft.to
+        );
+        assert!(
+            draft.to.iter().any(|a| a.email == "sato@client-a.example"),
+            "reply_all の宛先に元メールの差出人がいません: {:?}",
+            draft.to
+        );
+    }
+
     // --- inbox_digest が groups を返す。
     let digest = server.call_ok("inbox_digest", json!({}));
     assert!(
@@ -673,6 +706,7 @@ fn every_tool_returns_object_structured_content() {
                 "account_id": account_id,
                 "in_reply_to": msg_id,
                 "body": "承知しました。",
+                "reply_all": true,
             }),
             other => panic!(
                 "tools/list に新しいツール `{other}` がありますが、\

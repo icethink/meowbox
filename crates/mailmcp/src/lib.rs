@@ -109,6 +109,9 @@ pub struct CreateDraftArgs {
     pub to: Option<Vec<String>>,
     pub subject: Option<String>,
     pub body: String,
+    /// true のとき、元メールの差出人に加えて to / cc も宛先にする（自分のアドレスは除く）。
+    #[serde(default)]
+    pub reply_all: bool,
 }
 
 /// `get_attachment` の引数。
