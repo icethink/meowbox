@@ -66,6 +66,11 @@ cd apps/desktop && pnpm build
     API は RFC 3339 の日時だけを返し、`src/lib/relativeDate.ts` が組み立てる。
 12. **MCP に送信ツールと `mark` を出さない。** Claude が書けるのは要約・タスク・下書きだけ。
     アカウントの接続設定（host / port / username）とパスワードは MCP の返り値に含めない。
+13. **MCP のツールを足したり返り値を変えたりしたら、実クライアントから呼んで確かめる。**
+    Claude Code か Claude Desktop から実際に呼び出し、schema validation を通すこと。
+    stdio テストだけでは MCP の仕様適合を担保できない
+    （PR #5: `structuredContent` はオブジェクト必須という制約に stdio テストは気づけず、
+    実クライアントから呼んで初めて落ちた）。
 
 ## 現在のフェーズと次の一手
 P1 まで完了。次は P3-b / P4 / P6。
@@ -99,6 +104,8 @@ oauth2, keyring, rmcp, reqwest。追加時は workspace.dependencies に集約�
 - 3 回差し戻しても直らない単位は、その 1 回だけ `model: opus` を指定して implementer を呼び直し、どこで上位モデルを使ったかを result.md に書く。
 - サブエージェントへの指示は自己完結させる（会話の文脈は渡らない）。対象ファイル・期待する結果・検証コマンドを必ず含める。
 - 大きいログは全文を会話に貼らず、`Select-String` / `tail` で必要な行だけ読む。
+- 並行作業中は `git stash` を使わない。他の作業者の変更まで巻き込んで消す事故があった。
+- PR を書くときは `docs/pr/TEMPLATE.md` のチェックリストを使う。
 
 ## スタイル
 - コメントは日本語でよい。識別子は英語。
