@@ -882,8 +882,18 @@ fn save_summary_impl(
     Ok(SaveSummaryOut { id, created_at })
 }
 
-/// `upsert_tasks` の本体。`due` がパースできないタスクはそこでエラーにする
-/// （黙って期限を落とすと Claude も人間も気づけないため）。
+/// 検証済みで書き込み可能になった 1 タスク分のデータ。
+struct ValidatedTask<'a> {
+    account_id: i64,
+    source_message_id: Option<i64>,
+    title: &'a str,
+    due: Option<DateTime<Utc>>,
+    confidence: f32,
+}
+
+/// `upsert_tasks` の本体。`due` がパースできないタスクがあれば
+/// **1 件も書き込まずに**エラーを返す（途中まで書いてしまうと Claude も
+/// 人間も中途半端な状態に気づけないため）。
 fn upsert_tasks_impl(
     store: &Store,
     args: &UpsertTasksArgs,
@@ -892,33 +902,51 @@ fn upsert_tasks_impl(
         return Err("tasks が空です".to_string());
     }
 
-    let mut inserted = 0i64;
-    let mut updated = 0i64;
+    // 1 段目: 全件を検証する。ここでエラーが出た時点ではまだ何も書いていない。
+    let mut validated = Vec::with_capacity(args.tasks.len());
     for (i, t) in args.tasks.iter().enumerate() {
+        let account_id = t.account_id;
         let due = match &t.due {
             Some(s) => {
                 Some(parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?)
             }
             None => None,
         };
-        let new_task = NewTask {
-            account_id: t.account_id,
+        validated.push(ValidatedTask {
+            account_id,
             source_message_id: t.source_message_id,
             title: &t.title,
             due,
             confidence: t.confidence,
-            // created_by は MCP 経由 = Claude が作ったものなので常に "ai"。
-            created_by: "ai",
-        };
-        let (_, was_inserted) = store.upsert_task(&new_task).map_err(|e| e.to_string())?;
-        if was_inserted {
-            inserted += 1;
-        } else {
-            updated += 1;
-        }
+        });
     }
 
-    Ok(UpsertTasksOut { inserted, updated })
+    // 2 段目: 検証済みのデータをまとめて 1 トランザクションで書く。
+    // 途中で DB エラーが起きても全部巻き戻る。
+    store
+        .transaction(|_tx| {
+            let mut inserted = 0i64;
+            let mut updated = 0i64;
+            for v in &validated {
+                let new_task = NewTask {
+                    account_id: v.account_id,
+                    source_message_id: v.source_message_id,
+                    title: v.title,
+                    due: v.due,
+                    confidence: v.confidence,
+                    // created_by は MCP 経由 = Claude が作ったものなので常に "ai"。
+                    created_by: "ai",
+                };
+                let (_, was_inserted) = store.upsert_task(&new_task)?;
+                if was_inserted {
+                    inserted += 1;
+                } else {
+                    updated += 1;
+                }
+            }
+            Ok(UpsertTasksOut { inserted, updated })
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// `list_tasks` の本体。
@@ -1856,6 +1884,66 @@ mod tests {
         let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].created_by, "ai");
+    }
+
+    #[test]
+    fn upsert_tasks_impl_writes_nothing_if_any_task_is_invalid() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let args = UpsertTasksArgs {
+            tasks: vec![
+                mailmcp::TaskInput {
+                    account_id: account,
+                    source_message_id: None,
+                    title: "1件目（正しい）".to_string(),
+                    due: None,
+                    confidence: 0.8,
+                },
+                mailmcp::TaskInput {
+                    account_id: account,
+                    source_message_id: None,
+                    title: "2件目（due が不正）".to_string(),
+                    due: Some("not-a-date".to_string()),
+                    confidence: 0.8,
+                },
+            ],
+        };
+
+        let err = upsert_tasks_impl(&store, &args).unwrap_err();
+        assert!(err.contains("tasks[1]"));
+
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
+        assert_eq!(saved.len(), 0, "1件目も書き込まれてはいけない");
+    }
+
+    #[test]
+    fn upsert_tasks_impl_writes_all_tasks_when_all_are_valid() {
+        let store = Store::open_in_memory().unwrap();
+        let account = seed_account(&store, "a@mail.example", None);
+        let args = UpsertTasksArgs {
+            tasks: vec![
+                mailmcp::TaskInput {
+                    account_id: account,
+                    source_message_id: None,
+                    title: "1件目".to_string(),
+                    due: None,
+                    confidence: 0.8,
+                },
+                mailmcp::TaskInput {
+                    account_id: account,
+                    source_message_id: None,
+                    title: "2件目".to_string(),
+                    due: None,
+                    confidence: 0.8,
+                },
+            ],
+        };
+
+        let out = upsert_tasks_impl(&store, &args).unwrap();
+        assert_eq!((out.inserted, out.updated), (2, 0));
+
+        let saved = store.list_tasks(&mailstore::TaskQuery::default()).unwrap();
+        assert_eq!(saved.len(), 2);
     }
 
     #[test]
