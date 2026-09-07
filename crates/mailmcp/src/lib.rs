@@ -15,6 +15,12 @@
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
+/// すべてのツール description の末尾に必ず入れる、送信・既読変更をしないことの明記。
+/// `main.rs` の `safety_note_ja!` / `safety_note_en!` マクロと文字列が一致することを
+/// テストで確認する（`tests::safety_note_constants_match_macros`）。
+pub const SAFETY_NOTE_JA: &str = "送信はできません。既読状態は変更されません。";
+pub const SAFETY_NOTE_EN: &str = "This server cannot send mail and never changes read state.";
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchMessagesArgs {
     pub query: Option<String>,

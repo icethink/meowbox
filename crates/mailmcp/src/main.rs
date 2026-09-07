@@ -20,7 +20,8 @@ use chrono::{DateTime, Utc};
 use mailcore::Address;
 use mailmcp::{
     CreateDraftArgs, GetAttachmentArgs, GetMessageArgs, GetThreadArgs, InboxDigestArgs,
-    ListTasksArgs, SaveSummaryArgs, SearchMessagesArgs, UpsertTasksArgs,
+    ListTasksArgs, SaveSummaryArgs, SearchMessagesArgs, UpsertTasksArgs, SAFETY_NOTE_EN,
+    SAFETY_NOTE_JA,
 };
 use mailstore::{
     AttachmentRow, NewDraft, NewTask, SearchQuery, Store, SummaryRow, TaskQuery, ThreadQuery,
@@ -322,10 +323,22 @@ struct AttachmentFile {
     size: i64,
 }
 
-/// すべてのツール description に必ず入れる、送信・既読変更をしないことの明記。
-/// Claude が「このツールで送信できる／既読にできる」と誤解しないようにするための文言。
-const SAFETY_NOTE_JA: &str = "送信はできません。既読状態は変更されません。";
-const SAFETY_NOTE_EN: &str = "This server cannot send mail and never changes read state.";
+/// すべてのツール description の末尾に必ず入れる、送信・既読変更をしないことの明記
+/// （日本語）。`concat!` はリテラルしか受け付けないので `const` ではなくマクロにしている。
+/// `mailmcp::SAFETY_NOTE_JA` と文字列が一致することをテストで確認する
+/// （`tests::safety_note_constants_match_macros`）。
+macro_rules! safety_note_ja {
+    () => {
+        "送信はできません。既読状態は変更されません。"
+    };
+}
+
+/// `safety_note_ja!` の英語版。`mailmcp::SAFETY_NOTE_EN` と一致することをテストで確認する。
+macro_rules! safety_note_en {
+    () => {
+        "This server cannot send mail and never changes read state."
+    };
+}
 
 struct MeowboxMcp {
     store: Mutex<Store>,
@@ -357,10 +370,14 @@ impl MeowboxMcp {
 
 #[tool_router]
 impl MeowboxMcp {
-    #[tool(
-        description = "登録されているメールアカウントの一覧を返す。送信はできません。既読状態は変更されません。\n\
-        List the configured mail accounts. This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "登録されているメールアカウントの一覧を返す。",
+        safety_note_ja!(),
+        "\n",
+        "List the configured mail accounts. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn list_accounts(&self) -> Result<Json<ListAccountsOut>, String> {
         let store = self.lock_store()?;
         let accounts = store.list_accounts().map_err(|e| e.to_string())?;
@@ -389,12 +406,15 @@ impl MeowboxMcp {
         Ok(Json(ListAccountsOut { accounts: out }))
     }
 
-    #[tool(
-        description = "案件（project_tag）ごとにアカウントをまとめた一覧を返す。\
-        project_tag が無いアカウントは最後のグループにまとめる。送信はできません。既読状態は変更されません。\n\
-        List accounts grouped by project tag; accounts without a tag are grouped last. \
-        This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "案件（project_tag）ごとにアカウントをまとめた一覧を返す。\
+        project_tag が無いアカウントは最後のグループにまとめる。",
+        safety_note_ja!(),
+        "\n",
+        "List accounts grouped by project tag; accounts without a tag are grouped last. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn list_projects(&self) -> Result<Json<ListProjectsOut>, String> {
         let store = self.lock_store()?;
         let accounts = store.list_accounts().map_err(|e| e.to_string())?;
@@ -409,18 +429,20 @@ impl MeowboxMcp {
         }))
     }
 
-    #[tool(
-        description = "全文検索。件名・本文・差出人・案件タグ・既読状態などで絞り込み、\
+    #[doc = concat!(
+        "全文検索。件名・本文・差出人・案件タグ・既読状態などで絞り込み、\
         軽量なメッセージ一覧（本文は含まない）を返す。limit は 1〜200 に丸められる。\
         上限で切れたときは truncated=true を返す。\
-        include_body=true のとき、本文の先頭 2,000 文字を各結果に付ける。\
-        送信はできません。既読状態は変更されません。\n\
-        Full-text search across subject/body/sender/project/read-state; returns a \
+        include_body=true のとき、本文の先頭 2,000 文字を各結果に付ける。",
+        safety_note_ja!(),
+        "\n",
+        "Full-text search across subject/body/sender/project/read-state; returns a \
         lightweight message list without bodies. limit is clamped to 1..=200. \
         Returns truncated=true when the result was capped. \
-        When include_body is true, the first 2,000 characters of the body are included. \
-        This server cannot send mail and never changes read state."
+        When include_body is true, the first 2,000 characters of the body are included. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn search_messages(
         &self,
         Parameters(args): Parameters<SearchMessagesArgs>,
@@ -429,14 +451,16 @@ impl MeowboxMcp {
         search_messages_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "スレッドを時系列でまとめて 1 回で取得する。本文はテキスト整形済み。\
-        `include_quotes=true` のときだけ引用部分（quoted_text）を含める。\
-        送信はできません。既読状態は変更されません。\n\
-        Fetches a thread's messages in chronological order in one call. \
-        Quoted text is only included when include_quotes=true. \
-        This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "スレッドを時系列でまとめて 1 回で取得する。本文はテキスト整形済み。\
+        `include_quotes=true` のときだけ引用部分（quoted_text）を含める。",
+        safety_note_ja!(),
+        "\n",
+        "Fetches a thread's messages in chronological order in one call. \
+        Quoted text is only included when include_quotes=true. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn get_thread(
         &self,
         Parameters(args): Parameters<GetThreadArgs>,
@@ -445,14 +469,17 @@ impl MeowboxMcp {
         get_thread_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "1 通を本文・引用・添付一覧つきで取得する。include_html=true のとき\
-        body_html を返す（元のメールに HTML が無ければ null）。\
-        送信はできません。既読状態は変更されません。\n\
-        Fetches a single message with its body, quoted text and attachment list. \
+    #[doc = concat!(
+        "1 通を本文・引用・添付一覧つきで取得する。include_html=true のとき\
+        body_html を返す（元のメールに HTML が無ければ null）。",
+        safety_note_ja!(),
+        "\n",
+        "Fetches a single message with its body, quoted text and attachment list. \
         When include_html is true, body_html is returned (null when the original message \
-        has no HTML part). This server cannot send mail and never changes read state."
+        has no HTML part). ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn get_message(
         &self,
         Parameters(args): Parameters<GetMessageArgs>,
@@ -461,17 +488,19 @@ impl MeowboxMcp {
         get_message_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "未処理（未読）メールをスレッド単位でまとめたダイジェストを返す。\
+    #[doc = concat!(
+        "未処理（未読）メールをスレッド単位でまとめたダイジェストを返す。\
         project で案件を絞れる。since を省略すると直近 24 時間になる\
         （サーバは「今日」を知らないため）。limit は既定 20・最大 50 で、\
-        それ以上は truncated=true で切る。\
-        送信はできません。既読状態は変更されません。\n\
-        Returns unread mail grouped by thread as a digest. Can be filtered by project. \
+        それ以上は truncated=true で切る。",
+        safety_note_ja!(),
+        "\n",
+        "Returns unread mail grouped by thread as a digest. Can be filtered by project. \
         If since is omitted, the last 24 hours are used (the server has no notion of \
-        \"today\"). limit defaults to 20 and is capped at 50; beyond that, truncated=true. \
-        This server cannot send mail and never changes read state."
+        \"today\"). limit defaults to 20 and is capped at 50; beyond that, truncated=true. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn inbox_digest(
         &self,
         Parameters(args): Parameters<InboxDigestArgs>,
@@ -480,14 +509,16 @@ impl MeowboxMcp {
         inbox_digest_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "Claude が作った要約を保存する。target は thread:<key> / message:<id> / \
-        daily:<yyyy-mm-dd> のいずれかの形式にすること。model と summary は必須（空は不可）。\
-        送信はできません。既読状態は変更されません。\n\
-        Saves a Claude-generated summary. target must be thread:<key>, message:<id> or \
-        daily:<yyyy-mm-dd>. model and summary are required and must not be empty. \
-        This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "Claude が作った要約を保存する。target は thread:<key> / message:<id> / \
+        daily:<yyyy-mm-dd> のいずれかの形式にすること。model と summary は必須（空は不可）。",
+        safety_note_ja!(),
+        "\n",
+        "Saves a Claude-generated summary. target must be thread:<key>, message:<id> or \
+        daily:<yyyy-mm-dd>. model and summary are required and must not be empty. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn save_summary(
         &self,
         Parameters(args): Parameters<SaveSummaryArgs>,
@@ -496,16 +527,19 @@ impl MeowboxMcp {
         save_summary_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "タスク抽出結果をまとめて保存する（既存があれば更新、無ければ新規作成）。\
+    #[doc = concat!(
+        "タスク抽出結果をまとめて保存する（既存があれば更新、無ければ新規作成）。\
         created_by は常に \"ai\" になる。due を指定する場合は RFC3339 で、\
         パースできなければそのタスクをエラーにする。account_id は省略でき、その場合は\
-        source_message_id から推定する。送信はできません。既読状態は変更されません。\n\
-        Saves extracted tasks in bulk (insert or update). created_by is always \"ai\". \
+        source_message_id から推定する。",
+        safety_note_ja!(),
+        "\n",
+        "Saves extracted tasks in bulk (insert or update). created_by is always \"ai\". \
         due must be RFC3339 if given; an unparsable value fails that task. account_id \
-        may be omitted and is inferred from source_message_id. \
-        This server cannot send mail and never changes read state."
+        may be omitted and is inferred from source_message_id. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn upsert_tasks(
         &self,
         Parameters(args): Parameters<UpsertTasksArgs>,
@@ -514,12 +548,14 @@ impl MeowboxMcp {
         upsert_tasks_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "タスク一覧を返す。status（open/done/dismissed）や案件タグで絞り込める。\
-        送信はできません。既読状態は変更されません。\n\
-        Lists tasks, optionally filtered by status (open/done/dismissed) or project tag. \
-        This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "タスク一覧を返す。status（open/done/dismissed）や案件タグで絞り込める。",
+        safety_note_ja!(),
+        "\n",
+        "Lists tasks, optionally filtered by status (open/done/dismissed) or project tag. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn list_tasks(
         &self,
         Parameters(args): Parameters<ListTasksArgs>,
@@ -528,17 +564,21 @@ impl MeowboxMcp {
         list_tasks_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "下書きを保存するだけで、送信はしません。送信は Meowbox の画面から人間が行います。\
+    #[doc = concat!(
+        "下書きを保存するだけで、送信はしません。送信は Meowbox の画面から人間が行います。\
         in_reply_to があれば宛先・件名（Re: を二重に付けない）を補う。to / subject を指定すれば\
         そちらを優先する。reply_all=true のときは、元メールの to / cc も宛先に含める\
-        （自分のアドレスは除く）。既読状態は変更されません。\n\
-        Saves a reply draft only; it never sends anything. Sending is done by a human from \
+        （自分のアドレスは除く）。",
+        safety_note_ja!(),
+        "\n",
+        "Saves a reply draft only; it never sends anything. Sending is done by a human from \
         the Meowbox UI. If in_reply_to is given, the recipient and subject (without doubling \
         \"Re:\") are inferred, unless to / subject are given explicitly. When reply_all is \
         true, the original message's To and Cc are also included as recipients, excluding \
-        your own address. This server never changes read state."
+        your own address. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn create_draft(
         &self,
         Parameters(args): Parameters<CreateDraftArgs>,
@@ -547,12 +587,14 @@ impl MeowboxMcp {
         create_draft_impl(&store, &args).map(Json)
     }
 
-    #[tool(
-        description = "添付を取り出してローカルのファイルパスを返します。そのファイルを読めます。\
-        送信はできません。既読状態は変更されません。\n\
-        Extracts an attachment and returns a local file path that can be read directly. \
-        This server cannot send mail and never changes read state."
+    #[doc = concat!(
+        "添付を取り出してローカルのファイルパスを返します。そのファイルを読めます。",
+        safety_note_ja!(),
+        "\n",
+        "Extracts an attachment and returns a local file path that can be read directly. ",
+        safety_note_en!(),
     )]
+    #[tool]
     async fn get_attachment(
         &self,
         Parameters(args): Parameters<GetAttachmentArgs>,
@@ -1364,6 +1406,15 @@ mod tests {
     use super::*;
     use mailcore::AccountKind;
     use mailstore::NewMessage;
+
+    /// `mailmcp::SAFETY_NOTE_JA` / `SAFETY_NOTE_EN` と `safety_note_ja!` / `safety_note_en!`
+    /// の文字列が食い違わないことを確かめる（`concat!` はマクロ経由でしか使えないため、
+    /// 定数とマクロを別々に持っている。ここでズレを検知する）。
+    #[test]
+    fn safety_note_constants_match_macros() {
+        assert_eq!(SAFETY_NOTE_JA, safety_note_ja!());
+        assert_eq!(SAFETY_NOTE_EN, safety_note_en!());
+    }
 
     /// テスト用の `Account` を組み立てる。アドレスは RFC 2606 の `.example` のみ使う。
     fn account(id: i64, project_tag: Option<&str>) -> mailcore::Account {

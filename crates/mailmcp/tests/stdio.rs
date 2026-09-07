@@ -413,8 +413,13 @@ fn exercises_every_tool_over_stdio() {
     for t in &tools {
         let desc = t["description"].as_str().unwrap_or_default();
         assert!(
-            desc.contains("送信"),
-            "{} の description に「送信」が含まれていません: {desc}",
+            desc.contains(mailmcp::SAFETY_NOTE_JA),
+            "{} の description に日本語の安全文言が含まれていません: {desc}",
+            t["name"]
+        );
+        assert!(
+            desc.contains(mailmcp::SAFETY_NOTE_EN),
+            "{} の description に英語の安全文言が含まれていません: {desc}",
             t["name"]
         );
     }
