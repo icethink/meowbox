@@ -544,6 +544,21 @@ fn exercises_every_tool_over_stdio() {
         "inbox_digest の groups が空でした: {digest:?}"
     );
 
+    // --- inbox_digest: limit=1 で 1 件に切られ、truncated=true になる
+    //     （thread-1 / thread-2 / thread-3 の 3 スレッドすべてが未読を含む）。
+    let digest_limited = server.call_ok("inbox_digest", json!({ "limit": 1 }));
+    let count: usize = digest_limited["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["threads"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(
+        count, 1,
+        "inbox_digest limit=1 の結果件数: {digest_limited:?}"
+    );
+    assert_eq!(digest_limited["truncated"].as_bool(), Some(true));
+
     // --- get_attachment: 実在するパスを返し、一時ディレクトリの中にあること。
     let attachment_out = server.call_ok("get_attachment", json!({ "id": attachment_id }));
     let path = attachment_out["path"].as_str().expect("attachment path");
@@ -638,7 +653,7 @@ fn every_tool_returns_object_structured_content() {
             "get_thread" => json!({ "thread_key": THREAD_KEY, "include_quotes": false }),
             "get_message" => json!({ "id": msg_id, "include_html": false }),
             "get_attachment" => json!({ "id": attachment_id }),
-            "inbox_digest" => json!({}),
+            "inbox_digest" => json!({ "limit": 5 }),
             "save_summary" => json!({
                 "target": format!("thread:{THREAD_KEY}"),
                 "model": "claude-test",

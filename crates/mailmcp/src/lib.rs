@@ -57,6 +57,13 @@ pub struct InboxDigestArgs {
     pub project: Option<String>,
     /// RFC3339。省略時は直近 24 時間。
     pub since: Option<String>,
+    /// 返すスレッド数の上限。既定 20、最大 50。
+    #[serde(default = "default_digest_limit")]
+    pub limit: usize,
+}
+
+fn default_digest_limit() -> usize {
+    20
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

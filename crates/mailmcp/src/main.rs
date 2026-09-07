@@ -280,7 +280,7 @@ struct InboxDigestOut {
     /// 省略時は「直近 24 時間」（サーバは「今日」を知らないための方針）。
     since: String,
     groups: Vec<DigestGroupOut>,
-    /// スレッド数の上限（50）で切ったら true。
+    /// `limit`（既定 20、最大 50）で切ったら true。
     truncated: bool,
 }
 
@@ -452,13 +452,14 @@ impl MeowboxMcp {
 
     #[tool(
         description = "未処理（未読）メールをスレッド単位でまとめたダイジェストを返す。\
-        since を省略すると直近 24 時間になる（サーバは「今日」を知らないため）。\
-        スレッド数は最大 50 件で、それ以上は truncated=true で切る。\
+        project で案件を絞れる。since を省略すると直近 24 時間になる\
+        （サーバは「今日」を知らないため）。limit は既定 20・最大 50 で、\
+        それ以上は truncated=true で切る。\
         送信はできません。既読状態は変更されません。\n\
-        Returns unread mail grouped by thread as a digest. If since is omitted, the last \
-        24 hours are used (the server has no notion of \"today\"). At most 50 threads are \
-        returned; beyond that, truncated=true. This server cannot send mail and never \
-        changes read state."
+        Returns unread mail grouped by thread as a digest. Can be filtered by project. \
+        If since is omitted, the last 24 hours are used (the server has no notion of \
+        \"today\"). limit defaults to 20 and is capped at 50; beyond that, truncated=true. \
+        This server cannot send mail and never changes read state."
     )]
     async fn inbox_digest(
         &self,
@@ -781,7 +782,7 @@ fn get_message_impl(
     message_to_out(store, msg, true)
 }
 
-/// `inbox_digest` がスレッド数を切り上限とみなす件数。
+/// `inbox_digest` の `limit` が取りうる最大値。
 const INBOX_DIGEST_THREAD_LIMIT: usize = 50;
 
 /// `inbox_digest` の本体。
@@ -803,16 +804,19 @@ fn inbox_digest_impl(
     };
     let threads = store.list_threads(&query).map_err(|e| e.to_string())?;
 
+    // limit は 1..=INBOX_DIGEST_THREAD_LIMIT（50）に丸める。0 は 1 として扱う。
+    let limit = args.limit.clamp(1, INBOX_DIGEST_THREAD_LIMIT);
+
     // list_threads は最終更新の日時降順で返すので、フィルタ後もその順のまま。
     let filtered: Vec<_> = threads
         .into_iter()
         .filter(|t| t.last_date >= since)
         .collect();
-    let truncated = filtered.len() > INBOX_DIGEST_THREAD_LIMIT;
+    let truncated = filtered.len() > limit;
 
     let mut tagged: BTreeMap<String, Vec<DigestThreadOut>> = BTreeMap::new();
     let mut untagged: Vec<DigestThreadOut> = Vec::new();
-    for t in filtered.into_iter().take(INBOX_DIGEST_THREAD_LIMIT) {
+    for t in filtered.into_iter().take(limit) {
         let project_tag = t.project_tag.clone();
         let summary = store
             .latest_summary(&format!("thread:{}", t.thread_key))
@@ -1847,6 +1851,7 @@ mod tests {
         let args = InboxDigestArgs {
             project: None,
             since: None,
+            limit: 20,
         };
         let out = inbox_digest_impl(&store, &args).unwrap();
         let keys: Vec<&str> = out
@@ -1887,6 +1892,7 @@ mod tests {
         let args = InboxDigestArgs {
             project: None,
             since: Some((now - chrono::Duration::hours(2)).to_rfc3339()),
+            limit: 20,
         };
         let out = inbox_digest_impl(&store, &args).unwrap();
         let keys: Vec<&str> = out
@@ -1897,33 +1903,114 @@ mod tests {
         assert_eq!(keys, vec!["thread-new"]);
     }
 
-    #[test]
-    fn inbox_digest_impl_truncates_at_50_threads() {
+    /// `count` 件のスレッドを持つ store を用意する共通ヘルパ。
+    fn seed_many_threads(count: usize) -> Store {
         let store = Store::open_in_memory().unwrap();
         let account = seed_account(&store, "a@mail.example", None);
         let folder = store.ensure_folder(account, "INBOX", "inbox").unwrap();
         let now = chrono::Utc::now();
-        for i in 0..51 {
+        for i in 0..count {
             insert_msg(
                 &store,
                 account,
                 folder,
-                i + 1,
+                i as u32 + 1,
                 &format!("thread-{i}"),
                 "件名",
                 now - chrono::Duration::minutes(i as i64),
                 None,
             );
         }
+        store
+    }
+
+    #[test]
+    fn inbox_digest_impl_defaults_limit_to_20() {
+        let store = seed_many_threads(21);
 
         let args = InboxDigestArgs {
             project: None,
             since: None,
+            limit: 20,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let count: usize = out.groups.iter().map(|g| g.threads.len()).sum();
+        assert_eq!(count, 20);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn inbox_digest_impl_respects_a_smaller_limit_and_reports_truncated() {
+        let store = seed_many_threads(10);
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: None,
+            limit: 5,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let count: usize = out.groups.iter().map(|g| g.threads.len()).sum();
+        assert_eq!(count, 5);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn inbox_digest_impl_clamps_limit_above_50_down_to_50() {
+        let store = seed_many_threads(51);
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: None,
+            limit: 1000,
         };
         let out = inbox_digest_impl(&store, &args).unwrap();
         let count: usize = out.groups.iter().map(|g| g.threads.len()).sum();
         assert_eq!(count, 50);
         assert!(out.truncated);
+    }
+
+    #[test]
+    fn inbox_digest_impl_treats_limit_zero_as_one() {
+        let store = seed_many_threads(2);
+
+        let args = InboxDigestArgs {
+            project: None,
+            since: None,
+            limit: 0,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let count: usize = out.groups.iter().map(|g| g.threads.len()).sum();
+        assert_eq!(count, 1);
+        assert!(out.truncated);
+    }
+
+    #[test]
+    fn inbox_digest_impl_filters_by_project() {
+        let store = Store::open_in_memory().unwrap();
+        let account_a = seed_account(&store, "a@mail.example", Some("案件A"));
+        let account_b = seed_account(&store, "b@mail.example", Some("案件B"));
+        let folder_a = store.ensure_folder(account_a, "INBOX", "inbox").unwrap();
+        let folder_b = store.ensure_folder(account_b, "INBOX", "inbox").unwrap();
+        let now = chrono::Utc::now();
+        insert_msg(
+            &store, account_a, folder_a, 1, "thread-a", "件名A", now, None,
+        );
+        insert_msg(
+            &store, account_b, folder_b, 1, "thread-b", "件名B", now, None,
+        );
+
+        let args = InboxDigestArgs {
+            project: Some("案件A".to_string()),
+            since: None,
+            limit: 20,
+        };
+        let out = inbox_digest_impl(&store, &args).unwrap();
+        let keys: Vec<&str> = out
+            .groups
+            .iter()
+            .flat_map(|g| g.threads.iter().map(|t| t.thread_key.as_str()))
+            .collect();
+        assert_eq!(keys, vec!["thread-a"]);
     }
 
     #[test]
