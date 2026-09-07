@@ -93,15 +93,15 @@ messages_fts(subject, body_text, from_name, from_addr)  -- FTS5 trigram, externa
 |---|---|
 | `list_accounts` | アカウント一覧。`{ accounts: [...] }`（各要素は id/name/email/project_tag/kind/last_synced_at/unread_count のみ） |
 | `list_projects` | 案件（project_tag）ごとにアカウントをまとめた一覧。`{ projects: [...] }` |
-| `search_messages(query?, account_id?, project?, since?, unread_only?, limit)` | FTS + 条件検索。`{ messages: [...], truncated }`（各要素は軽量な id/件名/差出人/日付/snippet） |
+| `search_messages(query?, account_id?, project?, since?, unread_only?, limit, include_body?)` | FTS + 条件検索。`{ messages: [...], truncated }`（各要素は軽量な id/件名/差出人/日付/snippet）。`include_body`（既定 false）を true にすると各要素に `body_text` の先頭 2,000 文字が付く |
 | `get_thread(thread_key, include_quotes?)` | スレッドを時系列で1発取得（本文はテキスト整形済み。引用部は include_quotes=true のときだけ） |
-| `get_message(id, include_html?)` | 単体取得（include_html は現状無視される） |
+| `get_message(id, include_html?)` | 単体取得。`include_html`（既定 false）を true にすると `body_html` を返す（元メールに HTML が無ければ null） |
 | `get_attachment(id)` | ファイルパスを返す（Claude 側で Read できる） |
-| `inbox_digest(project?, since?)` | 未読メールの要約用ビュー：スレッド単位でまとめ、既存要約があれば添付 |
+| `inbox_digest(project?, since?, limit)` | 未読メールの要約用ビュー：スレッド単位でまとめ、既存要約があれば添付。`project` で案件を絞れる。`limit`（既定 20、最大 50）でスレッド数の上限を切り替えられる |
 | `save_summary(target, model, summary)` | Claude が作った要約を DB に保存 |
-| `upsert_tasks(tasks[])` | タスク抽出結果を保存（`status` は上書きしない） |
+| `upsert_tasks(tasks[])` | タスク抽出結果を保存（`status` は上書きしない）。各タスクの `account_id` は省略可で、省略時は `source_message_id` から推定する（両方無ければエラー） |
 | `list_tasks(status?, project?)` | タスク一覧。`{ tasks: [...] }` |
-| `create_draft(account_id, body, in_reply_to?, to?, subject?)` | 返信下書きを保存（**送信はしない**） |
+| `create_draft(account_id, body, in_reply_to?, to?, subject?, reply_all?)` | 返信下書きを保存（**送信はしない**）。`reply_all`（既定 false）を true にすると、元メールの差出人 + to + cc から自分のアドレスを除いた宛先になる。`to` を明示したときはそちらが優先される |
 
 **送信系と `mark`（既読・アーカイブ）は MCP に出さない**（[ADR 0002](adr/0002-no-send-over-mcp.md) /
 [ADR 0007](adr/0007-mcp-server.md)）。状態を変えるのは UI 上の人間の操作だけ。

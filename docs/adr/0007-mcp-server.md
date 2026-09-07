@@ -110,3 +110,37 @@ MCP の `structuredContent` はオブジェクトでなければならず、ト�
 `list_projects` / `list_tasks` / `search_messages` は、それぞれ
 `{ accounts: [...] }` / `{ projects: [...] }` / `{ tasks: [...] }` /
 `{ messages: [...], truncated }` という形でオブジェクトに包んで返す。
+
+## 追記 (2026-09-07) — 使い勝手の調整
+
+決定 8（「今日」を知らない）の延長で、「Claude に往復させない」という方針をさらに
+何点か引数に反映した。
+
+- `search_messages` に `include_body`（既定 false）。true のとき各結果に
+  `body_text` の先頭 2,000 文字を付ける。全文検索の結果を見てから
+  もう一度 `get_message` を呼ぶ往復を減らすため。
+- `inbox_digest` に `limit`（既定 20、最大 50）。案件を `project` で絞った上で
+  件数も調整できるようにした。
+- `create_draft` に `reply_all`（既定 false）。true のとき、元メールの
+  差出人 + to + cc から自分のアドレスを除いたものを宛先にする。`to` を
+  明示したときはそちらを優先する。全員返信のたびに Claude が宛先一覧を
+  組み立て直す必要をなくす。
+- `get_message` の `include_html` を実装した（積み残しだった項目）。true のとき
+  `body_html` を返す（元メールに HTML パートが無ければ null のまま）。
+- `upsert_tasks` の `account_id` を省略可にした。省略時は `source_message_id`
+  から対応するメールのアカウントを推定する。`account_id` と `source_message_id`
+  の両方が無いタスクはエラーにする。
+
+これに合わせて、エラーメッセージを日英併記（`{ja} / {en}`）に統一した。
+Claude Desktop / Claude Code は英語で動くこともあるため、日本語だけのエラーは
+文脈が伝わらないことがあったための対応。
+
+全ツールの description の末尾に必ず付けている安全文言（送信不可・既読状態不変）は、
+`SAFETY_NOTE_JA` / `SAFETY_NOTE_EN`（`mailmcp::lib`）と `safety_note_ja!` /
+`safety_note_en!`（`main.rs` のマクロ）から組み立てるようにし、両者の文字列が
+一致することをテストで固定した。実装上の注意として、`rmcp-macros` の
+`#[tool(description = ...)]` は文字列リテラルしか受け付けないため、マクロ展開の
+`concat!(...)` を渡すには `#[tool]` を素で付けたうえで `#[doc = concat!(...)]` を
+使っている。
+
+送信ツールと `mark` を出さない方針（決定 4）は変わっていない。
