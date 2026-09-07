@@ -171,6 +171,11 @@ struct ListTasksOut {
     tasks: Vec<TaskOut>,
 }
 
+/// MCP が返すエラー文言。日本語 / 英語の順で併記する。
+fn bilingual(ja: &str, en: &str) -> String {
+    format!("{ja} / {en}")
+}
+
 /// DB の文字列表現へ変換する。`mailstore` 側の同名関数は非公開なのでここに持つ。
 fn task_status_str(s: mailcore::TaskStatus) -> &'static str {
     match s {
@@ -186,8 +191,9 @@ fn parse_task_status(s: &str) -> std::result::Result<mailcore::TaskStatus, Strin
         "open" => Ok(mailcore::TaskStatus::Open),
         "done" => Ok(mailcore::TaskStatus::Done),
         "dismissed" => Ok(mailcore::TaskStatus::Dismissed),
-        other => Err(format!(
-            "不明な status です（open / done / dismissed のいずれか）: {other}"
+        other => Err(bilingual(
+            &format!("不明な status です（open / done / dismissed のいずれか）: {other}"),
+            &format!("unknown status (must be one of open / done / dismissed): {other}"),
         )),
     }
 }
@@ -341,8 +347,10 @@ impl MeowboxMcp {
     /// poisoned（他のツール呼び出しが panic した）ときは `unwrap()` せず文字列エラーにする。
     fn lock_store(&self) -> Result<MutexGuard<'_, Store>, String> {
         self.store.lock().map_err(|_| {
-            "内部状態のロックに失敗しました（他の呼び出しで異常終了した可能性があります）"
-                .to_string()
+            bilingual(
+                "内部状態のロックに失敗しました（他の呼び出しで異常終了した可能性があります）",
+                "failed to lock internal state (a previous call may have crashed)",
+            )
         })
     }
 }
@@ -607,7 +615,12 @@ fn group_accounts_by_project(
 fn parse_rfc3339(s: &str) -> std::result::Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| format!("日時の形式が不正です（RFC3339 で指定してください）: {s} ({e})"))
+        .map_err(|e| {
+            bilingual(
+                &format!("日時の形式が不正です（RFC3339 で指定してください）: {s} ({e})"),
+                &format!("invalid date/time format (must be RFC3339): {s} ({e})"),
+            )
+        })
 }
 
 /// `search_messages` の本体。`limit` は 1〜200 に丸める
@@ -731,7 +744,7 @@ fn get_thread_impl(store: &Store, args: &GetThreadArgs) -> std::result::Result<T
         .thread_messages(&args.thread_key)
         .map_err(|e| e.to_string())?;
     if messages.is_empty() {
-        return Err("スレッドが見つかりません".to_string());
+        return Err(bilingual("スレッドが見つかりません", "thread not found"));
     }
 
     let subject = messages
@@ -782,7 +795,7 @@ fn get_message_impl(
     let msg = store
         .get_message(args.id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "メッセージが見つかりません".to_string())?;
+        .ok_or_else(|| bilingual("メッセージが見つかりません", "message not found"))?;
     message_to_out(store, msg, true, args.include_html)
 }
 
@@ -881,17 +894,24 @@ fn save_summary_impl(
         || args.target.starts_with("message:")
         || args.target.starts_with("daily:"))
     {
-        return Err(format!(
-            "target の形式が不正です（thread:<key> / message:<id> / daily:<yyyy-mm-dd> の\
-             いずれかで始めてください）: {}",
-            args.target
+        return Err(bilingual(
+            &format!(
+                "target の形式が不正です（thread:<key> / message:<id> / daily:<yyyy-mm-dd> の\
+                 いずれかで始めてください）: {}",
+                args.target
+            ),
+            &format!(
+                "invalid target format (must start with thread:<key>, message:<id> or \
+                 daily:<yyyy-mm-dd>): {}",
+                args.target
+            ),
         ));
     }
     if args.model.is_empty() {
-        return Err("model を指定してください".to_string());
+        return Err(bilingual("model を指定してください", "model is required"));
     }
     if args.summary.trim().is_empty() {
-        return Err("summary が空です".to_string());
+        return Err(bilingual("summary が空です", "summary is empty"));
     }
 
     let id = store
@@ -901,7 +921,12 @@ fn save_summary_impl(
         .latest_summary(&args.target)
         .map_err(|e| e.to_string())?
         .map(|r| r.created_at.to_rfc3339())
-        .ok_or_else(|| "保存した要約の取得に失敗しました".to_string())?;
+        .ok_or_else(|| {
+            bilingual(
+                "保存した要約の取得に失敗しました",
+                "failed to read back the saved summary",
+            )
+        })?;
 
     Ok(SaveSummaryOut { id, created_at })
 }
@@ -926,15 +951,23 @@ fn resolve_task_account_id(
         return Ok(account_id);
     }
     let Some(source_message_id) = t.source_message_id else {
-        return Err(format!(
-            "tasks[{i}] は account_id か source_message_id のどちらかが必要です"
+        return Err(bilingual(
+            &format!("tasks[{i}] は account_id か source_message_id のどちらかが必要です"),
+            &format!("tasks[{i}] requires either account_id or source_message_id"),
         ));
     };
     let message = store
         .get_message(source_message_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| {
-            format!("tasks[{i}] の source_message_id {source_message_id} に対応するメールが見つかりません")
+            bilingual(
+                &format!(
+                    "tasks[{i}] の source_message_id {source_message_id} に対応するメールが見つかりません"
+                ),
+                &format!(
+                    "tasks[{i}] has no message matching source_message_id {source_message_id}"
+                ),
+            )
         })?;
     Ok(message.account_id)
 }
@@ -947,7 +980,7 @@ fn upsert_tasks_impl(
     args: &UpsertTasksArgs,
 ) -> std::result::Result<UpsertTasksOut, String> {
     if args.tasks.is_empty() {
-        return Err("tasks が空です".to_string());
+        return Err(bilingual("tasks が空です", "tasks is empty"));
     }
 
     // 1 段目: 全件を検証する。ここでエラーが出た時点ではまだ何も書いていない。
@@ -955,9 +988,12 @@ fn upsert_tasks_impl(
     for (i, t) in args.tasks.iter().enumerate() {
         let account_id = resolve_task_account_id(store, i, t)?;
         let due = match &t.due {
-            Some(s) => {
-                Some(parse_rfc3339(s).map_err(|e| format!("tasks[{i}] の due が不正です: {e}"))?)
-            }
+            Some(s) => Some(parse_rfc3339(s).map_err(|e| {
+                bilingual(
+                    &format!("tasks[{i}] の due が不正です: {e}"),
+                    &format!("tasks[{i}] has an invalid due: {e}"),
+                )
+            })?),
             None => None,
         };
         validated.push(ValidatedTask {
@@ -1026,7 +1062,12 @@ fn reply_all_recipients(
     let account = store
         .get_account(account_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "account_id に対応するアカウントが見つかりません".to_string())?;
+        .ok_or_else(|| {
+            bilingual(
+                "account_id に対応するアカウントが見つかりません",
+                "no account matches account_id",
+            )
+        })?;
     let own_email = account.email.to_lowercase();
 
     let candidates = std::iter::once(original.from.clone())
@@ -1046,7 +1087,10 @@ fn reply_all_recipients(
     }
 
     if recipients.is_empty() {
-        return Err("宛先が空になりました".to_string());
+        return Err(bilingual(
+            "宛先が空になりました",
+            "the recipient list is empty",
+        ));
     }
     Ok(recipients)
 }
@@ -1064,7 +1108,12 @@ fn resolve_draft_to_and_subject(
                 store
                     .get_message(id)
                     .map_err(|e| e.to_string())?
-                    .ok_or_else(|| "in_reply_to のメッセージが見つかりません".to_string())?,
+                    .ok_or_else(|| {
+                        bilingual(
+                            "in_reply_to のメッセージが見つかりません",
+                            "the in_reply_to message was not found",
+                        )
+                    })?,
             ),
             None => None,
         }
@@ -1082,17 +1131,21 @@ fn resolve_draft_to_and_subject(
             })
             .collect(),
         None if args.reply_all => {
-            let original = original
-                .as_ref()
-                .ok_or_else(|| "reply_all には in_reply_to が必要です".to_string())?;
+            let original = original.as_ref().ok_or_else(|| {
+                bilingual(
+                    "reply_all には in_reply_to が必要です",
+                    "reply_all requires in_reply_to",
+                )
+            })?;
             reply_all_recipients(store, args.account_id, original)?
         }
         None => match &original {
             Some(msg) => vec![msg.from.clone()],
             None => {
-                return Err(
-                    "宛先を決められません（to か in_reply_to を指定してください）".to_string(),
-                )
+                return Err(bilingual(
+                    "宛先を決められません（to か in_reply_to を指定してください）",
+                    "cannot determine a recipient (specify to or in_reply_to)",
+                ))
             }
         },
     };
@@ -1115,7 +1168,7 @@ fn create_draft_impl(
     args: &CreateDraftArgs,
 ) -> std::result::Result<CreateDraftOut, String> {
     if args.body.trim().is_empty() {
-        return Err("body が空です".to_string());
+        return Err(bilingual("body が空です", "body is empty"));
     }
 
     let (to, subject) = resolve_draft_to_and_subject(store, args)?;
@@ -1157,16 +1210,29 @@ fn write_attachment(
     let raw_path = store
         .message_raw_path(attachment.message_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "元のメールのファイルが見つかりません".to_string())?;
-    let raw =
-        std::fs::read(&raw_path).map_err(|_| "元のメールのファイルが見つかりません".to_string())?;
+        .ok_or_else(|| {
+            bilingual(
+                "元のメールのファイルが見つかりません",
+                "the original message file was not found",
+            )
+        })?;
+    let raw = std::fs::read(&raw_path).map_err(|_| {
+        bilingual(
+            "元のメールのファイルが見つかりません",
+            "the original message file was not found",
+        )
+    })?;
 
     let index = store
         .attachment_index(id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "添付が見つかりません".to_string())?;
-    let bytes = mailsync::parse::attachment_bytes(&raw, index)
-        .map_err(|_| "添付の取り出しに失敗しました".to_string())?;
+        .ok_or_else(|| bilingual("添付が見つかりません", "attachment not found"))?;
+    let bytes = mailsync::parse::attachment_bytes(&raw, index).map_err(|_| {
+        bilingual(
+            "添付の取り出しに失敗しました",
+            "failed to extract the attachment",
+        )
+    })?;
 
     let safe_name = mailsync::fsname::sanitize_path_segment(&attachment.filename);
     // フォールバック名は既に `id` を含んでいるので、二重に接頭辞を付けない。
@@ -1177,11 +1243,20 @@ fn write_attachment(
     };
 
     let dir = attachments_dir.join(attachment.message_id.to_string());
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("添付の保存先を作成できませんでした: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        bilingual(
+            &format!("添付の保存先を作成できませんでした: {e}"),
+            &format!("failed to create the attachment directory: {e}"),
+        )
+    })?;
 
     let path = dir.join(file_name);
-    std::fs::write(&path, &bytes).map_err(|e| format!("添付の保存に失敗しました: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| {
+        bilingual(
+            &format!("添付の保存に失敗しました: {e}"),
+            &format!("failed to save the attachment: {e}"),
+        )
+    })?;
 
     let path_str = path.to_string_lossy().to_string();
     store
@@ -1201,7 +1276,7 @@ fn extract_attachment_impl(
     let attachment = store
         .get_attachment(id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "添付が見つかりません".to_string())?;
+        .ok_or_else(|| bilingual("添付が見つかりません", "attachment not found"))?;
 
     let path_str = match &attachment.path {
         Some(existing) if Path::new(existing).exists() => existing.clone(),
@@ -1210,8 +1285,18 @@ fn extract_attachment_impl(
 
     match is_inside(attachments_dir, Path::new(&path_str)) {
         Ok(true) => {}
-        Ok(false) => return Err("添付のパスが不正です".to_string()),
-        Err(e) => return Err(format!("添付のパスを確認できませんでした: {e}")),
+        Ok(false) => {
+            return Err(bilingual(
+                "添付のパスが不正です",
+                "the attachment path is invalid",
+            ))
+        }
+        Err(e) => {
+            return Err(bilingual(
+                &format!("添付のパスを確認できませんでした: {e}"),
+                &format!("failed to verify the attachment path: {e}"),
+            ))
+        }
     }
 
     // `path_str` は `attachments_dir`（呼び出し側が絶対パスで渡す）配下のパスなので、
